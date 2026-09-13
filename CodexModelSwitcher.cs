@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Security.Cryptography;
@@ -15,11 +16,13 @@ namespace CodexModelSwitcher
 {
     internal static class Program
     {
+        internal const string Version = "1.6";
+
         [DllImport("shcore.dll")]
         private static extern int SetProcessDpiAwareness(int awareness);
 
         [DllImport("user32.dll")]
-        private static extern bool SetProcessDPIAware();
+        private static extern bool SetProcessDpiAwarenessContext(IntPtr awarenessContext);
 
         [STAThread]
         private static int Main(string[] args)
@@ -66,6 +69,18 @@ namespace CodexModelSwitcher
                 }
             }
 
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += delegate(object sender, ThreadExceptionEventArgs e)
+            {
+                Log.Error("界面线程发生未处理异常", e.Exception);
+                ShowFailure(e.Exception);
+            };
+            AppDomain.CurrentDomain.UnhandledException += delegate(object sender, UnhandledExceptionEventArgs e)
+            {
+                Log.Error("发生未处理异常", e.ExceptionObject as Exception);
+            };
+            Log.Info("启动 Codex 模型启动器 v" + Version + "，进程 " + Process.GetCurrentProcess().Id);
+
             EnableDpiAwareness();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
@@ -106,14 +121,30 @@ namespace CodexModelSwitcher
 
         private static void EnableDpiAwareness()
         {
+            // The bundled manifest declares PerMonitorV2; these calls only matter for source-only
+            // builds compiled without it. Never fall back to system-DPI awareness.
             try
             {
-                // Per-monitor DPI awareness when the source is compiled without the bundled manifest.
-                SetProcessDpiAwareness(2);
+                if (SetProcessDpiAwarenessContext(new IntPtr(-4))) return; // PER_MONITOR_AWARE_V2
             }
             catch
             {
-                try { SetProcessDPIAware(); } catch { }
+            }
+            try { SetProcessDpiAwareness(2); } catch { }
+        }
+
+        private static void ShowFailure(Exception error)
+        {
+            try
+            {
+                MessageBox.Show(
+                    "程序遇到了未预料的问题，但已被拦截，没有直接退出。\r\n\r\n" +
+                    (error == null ? "" : error.Message + "\r\n\r\n") +
+                    "日志文件：" + Log.CurrentFilePath,
+                    "Codex 模型启动器", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            catch
+            {
             }
         }
     }
@@ -130,6 +161,7 @@ namespace CodexModelSwitcher
         private readonly Label keyStatusLabel;
         private readonly Switcher switcher;
         private readonly Panel contentPanel;
+        private readonly FlowLayoutPanel cardsPanel;
         private float contentScale = 1F;
         private bool positioningContent;
 
@@ -191,18 +223,16 @@ namespace CodexModelSwitcher
             importButton.Click += delegate { using (ModelManagerForm form = new ModelManagerForm(switcher)) form.ShowDialog(this); };
             contentPanel.Controls.Add(importButton);
 
-            FlowLayoutPanel cards = new FlowLayoutPanel();
-            cards.Location = new Point(40, 126);
-            cards.Size = new Size(1000, 232);
-            cards.BackColor = Canvas;
-            cards.WrapContents = false;
-            cards.Padding = new Padding(0);
-            cards.Margin = new Padding(0);
-            contentPanel.Controls.Add(cards);
-
-            cards.Controls.Add(CreateCard("G", "GPT / OpenAI", "使用现有 ChatGPT 账号\n恢复原来的 Codex 配置", Blue, delegate { ActivateOpenAI(); }));
-            cards.Controls.Add(CreateCard("D", "DeepSeek Flash", "支持图片输入，速度更快\n适合日常编码任务", Teal, delegate { ActivateDeepSeek("deepseek-flash"); }));
-            cards.Controls.Add(CreateCard("D+", "DeepSeek V4 Pro", "增强推理能力，回答更深入\n适合复杂和长周期任务", Color.FromArgb(103, 78, 190), delegate { ActivateDeepSeek("deepseek-v4-pro"); }));
+            cardsPanel = new FlowLayoutPanel();
+            cardsPanel.Location = new Point(40, 126);
+            cardsPanel.Size = new Size(1000, 232);
+            cardsPanel.BackColor = Canvas;
+            cardsPanel.WrapContents = true;
+            cardsPanel.AutoScroll = true;
+            cardsPanel.Padding = new Padding(0);
+            cardsPanel.Margin = new Padding(0);
+            contentPanel.Controls.Add(cardsPanel);
+            BuildCards();
 
             RoundedPanel keyPanel = new RoundedPanel();
             keyPanel.Location = new Point(40, 382);
@@ -251,16 +281,21 @@ namespace CodexModelSwitcher
             privacy.TextAlign = ContentAlignment.MiddleLeft;
             keyPanel.Controls.Add(privacy);
 
-            Label restartHint = NewLabel("切换后如果 Codex 已打开，请从任务栏托盘完全退出再启动。", 8.7F, FontStyle.Regular, Muted);
+            Label restartHint = NewLabel("切换配置后可以自动重启 Codex 让新配置生效；也可以随时点右下角手动打开。", 8.7F, FontStyle.Regular, Muted);
             restartHint.Location = new Point(44, 614);
             restartHint.Size = new Size(760, 32);
             contentPanel.Controls.Add(restartHint);
 
             statusLabel = NewLabel("就绪 · 请选择一个模型", 9.5F, FontStyle.Bold, Muted);
             statusLabel.Location = new Point(44, 656);
-            statusLabel.Size = new Size(760, 42);
+            statusLabel.Size = new Size(700, 42);
             statusLabel.TextAlign = ContentAlignment.MiddleLeft;
             contentPanel.Controls.Add(statusLabel);
+
+            RoundedButton logButton = SmallButton("日志", Color.FromArgb(99, 99, 102), 84);
+            logButton.Location = new Point(766, 657);
+            logButton.Click += delegate { OpenLogFolder(); };
+            contentPanel.Controls.Add(logButton);
 
             RoundedButton openButton = SmallButton("打开 Codex  →", Ink, 174);
             openButton.Location = new Point(866, 657);
@@ -269,6 +304,8 @@ namespace CodexModelSwitcher
 
             UpdateKeyStatus();
             PositionContent();
+            CheckAuthCommandPath();
+            RefreshCatalogInBackground();
         }
 
         private void PositionContent()
@@ -324,6 +361,101 @@ namespace CodexModelSwitcher
             card.AccentColor = accent;
             card.Click += click;
             return card;
+        }
+
+        /// <summary>Cards follow the DeepSeek model catalog, so new official models show up on their own.</summary>
+        private void BuildCards()
+        {
+            if (cardsPanel == null) return;
+            cardsPanel.SuspendLayout();
+            try
+            {
+                for (int i = cardsPanel.Controls.Count - 1; i >= 0; i--)
+                {
+                    Control control = cardsPanel.Controls[i];
+                    cardsPanel.Controls.RemoveAt(i);
+                    control.Dispose();
+                }
+                cardsPanel.Controls.Add(CreateCard("G", "GPT / OpenAI", "使用现有 ChatGPT 账号\n恢复原来的 Codex 配置", Blue, delegate { ActivateOpenAI(); }));
+                List<ModelOption> options = switcher.LoadModelOptions();
+                for (int i = 0; i < options.Count; i++)
+                {
+                    ModelOption option = options[i];
+                    Color accent = i == 0 ? Teal : Color.FromArgb(103, 78, 190);
+                    string glyph = i == 0 ? "D" : i == 1 ? "D+" : "D" + (i + 1).ToString(CultureInfo.InvariantCulture);
+                    cardsPanel.Controls.Add(CreateCard(glyph, option.DisplayName, option.Description, accent, ActivateHandler(option.Slug)));
+                }
+            }
+            finally
+            {
+                cardsPanel.ResumeLayout(true);
+            }
+        }
+
+        private EventHandler ActivateHandler(string slug)
+        {
+            return delegate { ActivateDeepSeek(slug); };
+        }
+
+        /// <summary>
+        /// Codex fetches the API key by running this program, so moving or renaming the executable
+        /// silently breaks DeepSeek until the recorded path is refreshed.
+        /// </summary>
+        private void CheckAuthCommandPath()
+        {
+            try
+            {
+                if (switcher.DetectStaleAuthCommand() == null) return;
+                if (switcher.RepairAuthCommand())
+                    SetStatus("检测到程序被移动过，已自动修复 Codex 的取密钥路径", Blue);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("修复取密钥路径失败", ex);
+            }
+        }
+
+        private void RefreshCatalogInBackground()
+        {
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                try
+                {
+                    string before = string.Join("|", ModelSlugs());
+                    switcher.RefreshCatalog();
+                    string after = string.Join("|", ModelSlugs());
+                    if (before == after || IsDisposed) return;
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        BuildCards();
+                        SetStatus("已从 DeepSeek 官方目录更新模型列表", Blue);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("后台刷新模型目录失败", ex);
+                }
+            });
+        }
+
+        private string[] ModelSlugs()
+        {
+            List<string> slugs = new List<string>();
+            foreach (ModelOption option in switcher.LoadModelOptions()) slugs.Add(option.Slug);
+            return slugs.ToArray();
+        }
+
+        private void OpenLogFolder()
+        {
+            try
+            {
+                Directory.CreateDirectory(Log.DirectoryPath);
+                Process.Start(new ProcessStartInfo { FileName = Log.DirectoryPath, UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                ShowError("无法打开日志目录", ex);
+            }
         }
 
         private RoundedButton SmallButton(string text, Color color, int width)
@@ -430,14 +562,55 @@ namespace CodexModelSwitcher
 
         private void LaunchAfterSwitch()
         {
-            if (CodexLauncher.IsRunning())
+            if (!CodexLauncher.IsRunning())
             {
-                MessageBox.Show(this,
-                    "配置已经切换成功。\r\n\r\nCodex 当前仍在运行，必须从任务栏托盘菜单中选择 Quit 完全退出，然后再点击“打开 Codex”，新配置才会生效。",
-                    "需要重启 Codex", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                OpenCodex();
                 return;
             }
-            OpenCodex();
+            RestartCodex();
+        }
+
+        /// <summary>Offers to restart Codex so the freshly written provider config is picked up.</summary>
+        private void RestartCodex()
+        {
+            DialogResult answer = MessageBox.Show(this,
+                "配置已切换。Codex 需要完全退出后重新打开才会读取新配置。\r\n\r\n现在自动重启 Codex 吗？\r\n（Codex 中尚未发送的内容可能会丢失）",
+                "重启 Codex", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
+            if (answer != DialogResult.Yes)
+            {
+                SetStatus("配置已切换 · 请从任务栏托盘完全退出 Codex 后再打开", Blue);
+                return;
+            }
+
+            Cursor = Cursors.WaitCursor;
+            SetStatus("正在关闭 Codex…", Blue);
+            Application.DoEvents();
+            try
+            {
+                if (!CodexLauncher.TryCloseAll(10000))
+                {
+                    DialogResult force = MessageBox.Show(this,
+                        "Codex 没有响应关闭请求，可能仍驻留在托盘里。\r\n\r\n强制结束它的进程吗？未保存的内容会丢失。",
+                        "Codex 未退出", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+                    if (force != DialogResult.Yes)
+                    {
+                        SetStatus("已取消重启 · 请手动从托盘退出 Codex", Color.Firebrick);
+                        return;
+                    }
+                    CodexLauncher.KillAll();
+                    Thread.Sleep(1200);
+                }
+                OpenCodex();
+                SetStatus("已重启 Codex · 新配置已生效", Teal);
+            }
+            catch (Exception ex)
+            {
+                ShowError("重启 Codex 失败", ex);
+            }
+            finally
+            {
+                Cursor = Cursors.Default;
+            }
         }
 
         private void OpenCodex()
@@ -469,8 +642,42 @@ namespace CodexModelSwitcher
 
         private void ShowError(string title, Exception ex)
         {
+            Log.Error(title, ex);
             SetStatus(title, Color.Firebrick);
             MessageBox.Show(this, ex.Message, title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+
+        private const int WmDpiChanged = 0x02E0;
+
+        protected override void WndProc(ref Message message)
+        {
+            base.WndProc(ref message);
+            if (message.Msg != WmDpiChanged) return;
+            try
+            {
+                ResetContentScale();
+                PositionContent();
+                Log.Info("显示器 DPI 变化，界面已重新排布");
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("DPI 变化后重新布局失败", ex);
+            }
+        }
+
+        /// <summary>Undoes accumulated manual scaling so the panel can be fitted to the new DPI.</summary>
+        private void ResetContentScale()
+        {
+            if (contentScale <= 0.01F) { contentScale = 1F; return; }
+            if (Math.Abs(contentScale - 1F) > 0.002F)
+            {
+                float inverse = 1F / contentScale;
+                contentPanel.SuspendLayout();
+                contentPanel.Scale(new SizeF(inverse, inverse));
+                contentPanel.ResumeLayout(true);
+            }
+            contentPanel.Size = new Size(1080, 720);
+            contentScale = 1F;
         }
     }
 
@@ -702,6 +909,37 @@ namespace CodexModelSwitcher
 
         private void ShowError(Exception ex) { ShowStatus(ex.Message, Color.FromArgb(190, 45, 45)); MessageBox.Show(this, ex.Message, "操作失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         private void ShowStatus(string text, Color color) { statusLabel.Text = text; statusLabel.ForeColor = color; }
+
+        private const int WmDpiChanged = 0x02E0;
+
+        protected override void WndProc(ref Message message)
+        {
+            base.WndProc(ref message);
+            if (message.Msg != WmDpiChanged) return;
+            try
+            {
+                ResetContentScale();
+                PositionContent();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("DPI 变化后重新布局失败", ex);
+            }
+        }
+
+        private void ResetContentScale()
+        {
+            if (contentScale <= 0.01F) { contentScale = 1F; return; }
+            if (Math.Abs(contentScale - 1F) > 0.002F)
+            {
+                float inverse = 1F / contentScale;
+                contentPanel.SuspendLayout();
+                contentPanel.Scale(new SizeF(inverse, inverse));
+                contentPanel.ResumeLayout(true);
+            }
+            contentPanel.Size = new Size(900, 620);
+            contentScale = 1F;
+        }
     }
 
     internal sealed class UsageForm : Form
@@ -713,6 +951,8 @@ namespace CodexModelSwitcher
         private bool refreshing;
         private float contentScale = 1F;
         private bool positioningContent;
+        private readonly Switcher switcher = new Switcher();
+        private readonly Dictionary<string, string> lastGoodValues = new Dictionary<string, string>();
 
         public UsageForm()
         {
@@ -789,8 +1029,9 @@ namespace CodexModelSwitcher
         {
             list.Items.Clear();
             list.Items.Add(new ListViewItem(new string[] { "GPT / OpenAI", "ChatGPT 账号", "等待刷新（官方 Codex App Server）" }) { Name = "openai" });
-            list.Items.Add(new ListViewItem(new string[] { "DeepSeek Flash", "DeepSeek", SecretStore.Exists() ? "等待刷新" : "尚未配置 API Key" }) { Name = "deepseek-flash" });
-            list.Items.Add(new ListViewItem(new string[] { "DeepSeek V4 Pro", "DeepSeek", SecretStore.Exists() ? "等待刷新" : "尚未配置 API Key" }) { Name = "deepseek-v4-pro" });
+            List<ModelOption> options = switcher.LoadModelOptions();
+            foreach (ModelOption option in options)
+                list.Items.Add(new ListViewItem(new string[] { option.DisplayName, "DeepSeek", SecretStore.Exists() ? "等待刷新" : "尚未配置 API Key" }) { Name = option.Slug });
             foreach (ProviderProfile p in ProviderStore.Load())
                 list.Items.Add(new ListViewItem(new string[] { p.Model, p.Name, p.UsageUrl.Length > 0 ? "等待刷新" : "提供商未配置用量接口" }) { Name = p.Id });
         }
@@ -803,23 +1044,56 @@ namespace CodexModelSwitcher
             ThreadPool.QueueUserWorkItem(delegate
             {
                 Dictionary<string, string> values = new Dictionary<string, string>();
-                try { values["openai"] = CodexAppServerUsage.Read().ToDisplayString(); }
-                catch (Exception ex) { values["openai"] = "读取失败：" + ex.Message; }
+                Dictionary<string, string> errors = new Dictionary<string, string>();
+
+                try
+                {
+                    values["openai"] = CodexAppServerUsage.Read().ToDisplayString();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("读取 GPT 限额失败", ex);
+                    errors["openai"] = switcher.IsApiKeyMode()
+                        ? "当前处于 DeepSeek / API Key 模式，切回 GPT 卡片后即可读取"
+                        : "读取失败：" + ex.Message;
+                }
+
+                List<ModelOption> options = switcher.LoadModelOptions();
                 if (SecretStore.Exists())
                 {
-                    try { string balance = DeepSeekApi.GetBalance(SecretStore.Load("deepseek")); values["deepseek-flash"] = balance; values["deepseek-v4-pro"] = balance + "（共享账户）"; }
-                    catch (Exception ex) { values["deepseek-flash"] = values["deepseek-v4-pro"] = "读取失败：" + ex.Message; }
+                    string balance = null;
+                    string balanceError = null;
+                    try { balance = DeepSeekApi.GetBalance(SecretStore.Load("deepseek")); }
+                    catch (Exception ex) { balanceError = ex.Message; Log.Warn("读取 DeepSeek 余额失败", ex); }
+                    foreach (ModelOption option in options)
+                    {
+                        if (balance != null) values[option.Slug] = options.Count > 1 ? balance + "（共享账户）" : balance;
+                        else errors[option.Slug] = "读取失败：" + balanceError;
+                    }
                 }
                 foreach (ProviderProfile p in ProviderStore.Load())
                 {
                     if (p.UsageUrl.Length == 0 || !SecretStore.Exists(p.Id)) continue;
                     try { values[p.Id] = GenericProviderApi.GetUsage(p, SecretStore.Load(p.Id)); }
-                    catch (Exception ex) { values[p.Id] = "读取失败：" + ex.Message; }
+                    catch (Exception ex) { errors[p.Id] = "读取失败：" + ex.Message; Log.Warn("读取 " + p.Name + " 用量失败", ex); }
                 }
                 if (IsDisposed) return;
                 BeginInvoke((MethodInvoker)delegate
                 {
-                    foreach (KeyValuePair<string, string> item in values) if (list.Items.ContainsKey(item.Key)) list.Items[item.Key].SubItems[2].Text = item.Value;
+                    foreach (KeyValuePair<string, string> item in values)
+                    {
+                        if (!list.Items.ContainsKey(item.Key)) continue;
+                        list.Items[item.Key].SubItems[2].Text = item.Value;
+                        lastGoodValues[item.Key] = item.Value;
+                    }
+                    foreach (KeyValuePair<string, string> item in errors)
+                    {
+                        if (!list.Items.ContainsKey(item.Key)) continue;
+                        string text = item.Value;
+                        string previous;
+                        if (lastGoodValues.TryGetValue(item.Key, out previous)) text += "　·　上次成功：" + previous;
+                        list.Items[item.Key].SubItems[2].Text = text;
+                    }
                     refreshedLabel.Text = "上次刷新：" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
                     refreshing = false;
                 });
@@ -827,6 +1101,37 @@ namespace CodexModelSwitcher
         }
 
         protected override void Dispose(bool disposing) { if (disposing && timer != null) timer.Dispose(); base.Dispose(disposing); }
+
+        private const int WmDpiChanged = 0x02E0;
+
+        protected override void WndProc(ref Message message)
+        {
+            base.WndProc(ref message);
+            if (message.Msg != WmDpiChanged) return;
+            try
+            {
+                ResetContentScale();
+                PositionContent();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("DPI 变化后重新布局失败", ex);
+            }
+        }
+
+        private void ResetContentScale()
+        {
+            if (contentScale <= 0.01F) { contentScale = 1F; return; }
+            if (Math.Abs(contentScale - 1F) > 0.002F)
+            {
+                float inverse = 1F / contentScale;
+                contentPanel.SuspendLayout();
+                contentPanel.Scale(new SizeF(inverse, inverse));
+                contentPanel.ResumeLayout(true);
+            }
+            contentPanel.Size = new Size(820, 540);
+            contentScale = 1F;
+        }
     }
 
     internal sealed class ChatGptLimitWindow
@@ -910,7 +1215,7 @@ namespace CodexModelSwitcher
                 WriteLine(process, "{\"method\":\"initialized\",\"params\":{}}");
                 WriteLine(process, "{\"method\":\"account/rateLimits/read\",\"id\":6,\"params\":{}}");
                 if (!limitsReady.WaitOne(15000)) throw new TimeoutException("GPT 限额读取超时" + ErrorSuffix(lastError));
-                if (limitsResponse.Contains("\"error\"")) throw new InvalidOperationException("当前 Codex 登录无法读取 ChatGPT 限额");
+                if (limitsResponse.Contains("\"error\"")) throw new InvalidOperationException("当前 Codex 登录无法读取 ChatGPT 限额" + ServerErrorSuffix(limitsResponse));
                 return Parse(limitsResponse);
             }
             finally
@@ -977,6 +1282,19 @@ namespace CodexModelSwitcher
         private static string ErrorSuffix(string error)
         {
             return string.IsNullOrWhiteSpace(error) ? "" : "：" + error.Trim();
+        }
+
+        /// <summary>Pulls the JSON-RPC error message out of a failed reply so the UI can explain it.</summary>
+        private static string ServerErrorSuffix(string response)
+        {
+            if (string.IsNullOrWhiteSpace(response)) return "";
+            object root;
+            if (Json.TryParse(response, out root))
+            {
+                string message = Json.Text(Json.Member(Json.Member(root, "error"), "message"));
+                if (!string.IsNullOrWhiteSpace(message)) return "：" + message;
+            }
+            return "";
         }
     }
 
@@ -1307,6 +1625,9 @@ namespace CodexModelSwitcher
 
     internal static class DeepSeekApi
     {
+        /// <summary>Warns in the usage list when the account balance drops below this amount.</summary>
+        internal const double LowBalanceThreshold = 5.0;
+
         public static void Test(string apiKey)
         {
             GetBalance(apiKey);
@@ -1314,36 +1635,42 @@ namespace CodexModelSwitcher
 
         public static string GetBalance(string apiKey)
         {
-            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create("https://api.deepseek.com/user/balance");
-            request.Method = "GET";
-            request.Timeout = 15000;
-            request.ReadWriteTimeout = 15000;
-            request.Headers[HttpRequestHeader.Authorization] = "Bearer " + apiKey;
-            request.UserAgent = "CodexModelSwitcher/1.0";
-            try
+            string json = GenericProviderApi.Get("https://api.deepseek.com/user/balance", apiKey, "DeepSeek");
+            object root;
+            if (!Json.TryParse(json, out root))
+                throw new InvalidOperationException("DeepSeek 返回的数据无法解析为 JSON。");
+
+            if (string.Equals(Json.Text(Json.Member(root, "is_available")), "false", StringComparison.OrdinalIgnoreCase))
+                return "账户余额不可用";
+
+            List<string> parts = new List<string>();
+            double lowest = double.MaxValue;
+            List<object> infos = Json.Array(Json.Member(root, "balance_infos"));
+            if (infos != null)
             {
-                using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+                foreach (object item in infos)
                 {
-                    if ((int)response.StatusCode < 200 || (int)response.StatusCode >= 300)
-                        throw new InvalidOperationException("DeepSeek 返回 HTTP " + (int)response.StatusCode + "。");
-                    string json;
-                    using (StreamReader reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8)) json = reader.ReadToEnd();
-                    if (Regex.IsMatch(json, "\\\"is_available\\\"\\s*:\\s*false", RegexOptions.IgnoreCase)) return "账户余额不可用";
-                    MatchCollection amounts = Regex.Matches(json, "\\\"total_balance\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
-                    MatchCollection currencies = Regex.Matches(json, "\\\"currency\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
-                    List<string> parts = new List<string>();
-                    for (int i = 0; i < amounts.Count; i++) parts.Add(amounts[i].Groups[1].Value + (i < currencies.Count ? " " + currencies[i].Groups[1].Value : ""));
-                    return parts.Count > 0 ? "可用余额：" + string.Join(" / ", parts.ToArray()) : "连接正常（接口未返回可显示余额）";
+                    string currency = Json.Text(Json.Member(item, "currency"));
+                    string total = Json.Text(Json.Member(item, "total_balance"));
+                    string granted = Json.Text(Json.Member(item, "granted_balance"));
+                    string topped = Json.Text(Json.Member(item, "topped_up_balance"));
+                    if (string.IsNullOrWhiteSpace(total) && string.IsNullOrWhiteSpace(granted) && string.IsNullOrWhiteSpace(topped)) continue;
+
+                    string text = (string.IsNullOrWhiteSpace(total) ? "?" : total) + (string.IsNullOrWhiteSpace(currency) ? "" : " " + currency);
+                    List<string> details = new List<string>();
+                    if (!string.IsNullOrWhiteSpace(topped)) details.Add("充值 " + topped);
+                    if (!string.IsNullOrWhiteSpace(granted)) details.Add("赠金 " + granted);
+                    if (details.Count > 0) text += "（" + string.Join(" / ", details.ToArray()) + "）";
+                    parts.Add(text);
+
+                    double amount;
+                    if (double.TryParse(total, NumberStyles.Float, CultureInfo.InvariantCulture, out amount) && amount < lowest) lowest = amount;
                 }
             }
-            catch (WebException ex)
-            {
-                HttpWebResponse response = ex.Response as HttpWebResponse;
-                if (response != null)
-                    throw new InvalidOperationException("DeepSeek 返回 HTTP " + (int)response.StatusCode + "，请检查 API Key 和账户状态。", ex);
-                throw new InvalidOperationException("无法连接 DeepSeek API：" + ex.Message, ex);
-            }
+            if (parts.Count == 0) return "连接正常（接口未返回可显示余额）";
+            string result = "可用余额：" + string.Join(" / ", parts.ToArray());
+            if (lowest < LowBalanceThreshold) result = "⚠ 余额偏低 · " + result;
+            return result;
         }
     }
 
@@ -1358,18 +1685,25 @@ namespace CodexModelSwitcher
         public static string GetUsage(ProviderProfile profile, string apiKey)
         {
             if (string.IsNullOrWhiteSpace(profile.UsageUrl)) return "提供商未配置用量接口";
-            string text = Regex.Replace(Get(profile.UsageUrl, apiKey, "用量接口"), "\\s+", " ").Trim();
+            string raw = Get(profile.UsageUrl, apiKey, "用量接口");
+            object root;
+            if (Json.TryParse(raw, out root))
+            {
+                List<string> items = Json.Highlights(root, 6);
+                if (items.Count > 0) return string.Join(" · ", items.ToArray());
+            }
+            string text = Regex.Replace(raw, "\\s+", " ").Trim();
             if (text.Length > 180) text = text.Substring(0, 177) + "…";
             return text;
         }
 
-        private static string Get(string url, string apiKey, string label)
+        internal static string Get(string url, string apiKey, string label)
         {
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
             HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
             request.Method = "GET"; request.Timeout = 15000; request.ReadWriteTimeout = 15000;
             request.Headers[HttpRequestHeader.Authorization] = "Bearer " + apiKey;
-            request.UserAgent = "CodexModelSwitcher/1.3";
+            request.UserAgent = "CodexModelSwitcher/" + Program.Version;
             try
             {
                 using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
@@ -1441,13 +1775,14 @@ namespace CodexModelSwitcher
 
         public SwitchResult ActivateDeepSeek(string model)
         {
-            if (model != "deepseek-flash" && model != "deepseek-v4-pro")
+            if (!IsKnownDeepSeekModel(model))
                 throw new ArgumentException("不支持的 DeepSeek 模型。", "model");
 
             Directory.CreateDirectory(codexHome);
             Directory.CreateDirectory(appData);
-            string current = File.Exists(ConfigPath) ? File.ReadAllText(ConfigPath, Encoding.UTF8) : "";
-            string backup = Backup(current, File.Exists(ConfigPath));
+            bool existed = File.Exists(ConfigPath);
+            string current = existed ? File.ReadAllText(ConfigPath, Encoding.UTF8) : "";
+            string backup = Backup(current, existed);
 
             if (!File.Exists(StatePath))
             {
@@ -1487,7 +1822,9 @@ namespace CodexModelSwitcher
             provider.AppendLine("refresh_interval_ms = 0");
 
             string result = managed.ToString() + clean.TrimStart('\r', '\n') + provider.ToString();
+            EnsureUnchanged(ConfigPath, current, existed);
             WriteAtomic(ConfigPath, Normalize(result).TrimEnd() + Environment.NewLine);
+            Log.Info("已切换到 " + model + "（备份：" + backup + "）");
             return new SwitchResult { Message = "已切换到 " + DisplayName(model) + "。", BackupPath = backup };
         }
 
@@ -1528,7 +1865,9 @@ namespace CodexModelSwitcher
             provider.AppendLine("args = [\"--print-secret\", " + TomlString(profile.Id) + "]");
             provider.AppendLine("timeout_ms = 5000");
             provider.AppendLine("refresh_interval_ms = 0");
+            EnsureUnchanged(ConfigPath, currentConfig, existed);
             WriteAtomic(ConfigPath, Normalize(managed.ToString() + clean.TrimStart('\r', '\n') + provider.ToString()).TrimEnd() + Environment.NewLine);
+            Log.Info("已切换到导入模型 " + profile.Id + "（" + profile.Name + " / " + profile.Model + "）");
             return new SwitchResult { Message = "已切换到 " + profile.Name + " / " + profile.Model + "。", BackupPath = backup };
         }
 
@@ -1566,9 +1905,11 @@ namespace CodexModelSwitcher
             if (restore.Count > 0)
                 output.AppendLine();
             output.Append(clean.TrimStart('\r', '\n'));
+            EnsureUnchanged(ConfigPath, current, exists);
             WriteAtomic(ConfigPath, Normalize(output.ToString()).TrimEnd() + Environment.NewLine);
             if (File.Exists(StatePath))
                 File.Delete(StatePath);
+            Log.Info("已恢复 GPT / OpenAI 配置（备份：" + backup + "）");
             return new SwitchResult { Message = "已恢复 GPT / OpenAI 配置，ChatGPT 登录缓存保持不变。", BackupPath = backup };
         }
 
@@ -1592,7 +1933,41 @@ namespace CodexModelSwitcher
             string stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
             string path = Path.Combine(BackupDirectory, existed ? "config-" + stamp + ".toml" : "config-" + stamp + "-did-not-exist.txt");
             File.WriteAllText(path, content, new UTF8Encoding(false));
+            PruneBackups(20);
             return path;
+        }
+
+        /// <summary>Keeps the backup folder bounded; the newest <paramref name="keep"/> files survive.</summary>
+        private void PruneBackups(int keep)
+        {
+            try
+            {
+                string[] files = Directory.GetFiles(BackupDirectory, "config-*");
+                if (files.Length <= keep) return;
+                Array.Sort(files, delegate(string a, string b) { return File.GetLastWriteTimeUtc(b).CompareTo(File.GetLastWriteTimeUtc(a)); });
+                for (int i = keep; i < files.Length; i++)
+                {
+                    try { File.Delete(files[i]); } catch { }
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        /// <summary>
+        /// Aborts instead of overwriting when config.toml changed after we read it, which happens
+        /// when the Codex desktop app writes its own settings at the same moment.
+        /// </summary>
+        internal static void EnsureUnchanged(string path, string expectedContent, bool expectedExists)
+        {
+            bool exists = File.Exists(path);
+            if (exists != expectedExists)
+                throw new InvalidOperationException("Codex 配置在操作期间被其他程序改动，已中止以免覆盖你的设置。请重新点一次卡片。");
+            if (!exists) return;
+            string current = File.ReadAllText(path, Encoding.UTF8);
+            if (!string.Equals(current, expectedContent, StringComparison.Ordinal))
+                throw new InvalidOperationException("Codex 配置在操作期间被其他程序改动，已中止以免覆盖你的设置。请重新点一次卡片。");
         }
 
         private void EnsureCatalog()
@@ -1627,8 +2002,175 @@ namespace CodexModelSwitcher
             }
 
             if (string.IsNullOrWhiteSpace(json) || !json.Contains("\"deepseek-flash\"") || !json.Contains("\"deepseek-v4-pro\""))
+            {
+                if (!string.IsNullOrWhiteSpace(json)) Log.Warn("DeepSeek 官方模型目录内容与预期不符，改用内置目录。");
                 json = FallbackCatalog;
+            }
+            else
+            {
+                object parsed;
+                List<object> models = Json.TryParse(json, out parsed) ? Json.Array(Json.Member(parsed, "models")) : null;
+                bool usable = models != null;
+                if (usable)
+                {
+                    usable = false;
+                    foreach (object item in models)
+                    {
+                        if (!string.IsNullOrWhiteSpace(Json.Text(Json.Member(item, "slug")))) { usable = true; break; }
+                    }
+                }
+                if (!usable)
+                {
+                    Log.Warn("DeepSeek 官方模型目录结构无法识别，改用内置目录。");
+                    json = FallbackCatalog;
+                }
+            }
             WriteAtomic(CatalogPath, json.Trim() + Environment.NewLine);
+        }
+
+        /// <summary>Refreshes the DeepSeek model catalog; safe to call from a background thread.</summary>
+        public void RefreshCatalog()
+        {
+            try
+            {
+                EnsureCatalog();
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("刷新 DeepSeek 模型目录失败", ex);
+            }
+        }
+
+        /// <summary>
+        /// DeepSeek models to show as cards. Driven by the catalog the switcher writes, so new
+        /// official models appear without a new build; falls back to the built-in pair.
+        /// </summary>
+        public List<ModelOption> LoadModelOptions()
+        {
+            List<ModelOption> options = new List<ModelOption>();
+            try
+            {
+                if (File.Exists(CatalogPath))
+                {
+                    object root;
+                    if (Json.TryParse(File.ReadAllText(CatalogPath, Encoding.UTF8), out root))
+                    {
+                        List<object> models = Json.Array(Json.Member(root, "models"));
+                        if (models != null)
+                        {
+                            foreach (object item in models)
+                            {
+                                string slug = Json.Text(Json.Member(item, "slug"));
+                                if (string.IsNullOrWhiteSpace(slug)) continue;
+                                string display = Json.Text(Json.Member(item, "display_name"));
+                                options.Add(new ModelOption
+                                {
+                                    Slug = slug,
+                                    DisplayName = ReadableName(slug, display),
+                                    Description = DescribeModel(slug)
+                                });
+                                if (options.Count >= 6) break;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("读取 DeepSeek 模型目录失败，使用内置列表", ex);
+            }
+            if (options.Count == 0)
+            {
+                options.Add(new ModelOption { Slug = "deepseek-flash", DisplayName = "DeepSeek Flash", Description = DescribeModel("deepseek-flash") });
+                options.Add(new ModelOption { Slug = "deepseek-v4-pro", DisplayName = "DeepSeek V4 Pro", Description = DescribeModel("deepseek-v4-pro") });
+            }
+            return options;
+        }
+
+        public bool IsKnownDeepSeekModel(string slug)
+        {
+            if (string.IsNullOrWhiteSpace(slug)) return false;
+            foreach (ModelOption option in LoadModelOptions())
+            {
+                if (string.Equals(option.Slug, slug, StringComparison.Ordinal)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>True when config.toml is currently forced into API-key auth (third-party mode).</summary>
+        public bool IsApiKeyMode()
+        {
+            try
+            {
+                if (!File.Exists(ConfigPath)) return false;
+                string text = File.ReadAllText(ConfigPath, Encoding.UTF8);
+                return Regex.IsMatch(text, "(?m)^\\s*forced_login_method\\s*=\\s*[\\\"']api[\\\"']");
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("读取当前登录模式失败", ex);
+                return false;
+            }
+        }
+
+        internal static string DescribeModel(string slug)
+        {
+            if (slug == "deepseek-flash") return "支持图片输入，速度更快\n适合日常编码任务";
+            if (slug == "deepseek-v4-pro") return "增强推理能力，回答更深入\n适合复杂和长周期任务";
+            return "DeepSeek 官方模型目录中的模型\n点击切换并启动 Codex";
+        }
+
+        /// <summary>The catalog uses hyphenated names ("DeepSeek-V4-Pro"); show something readable.</summary>
+        internal static string ReadableName(string slug, string displayName)
+        {
+            if (slug == "deepseek-flash") return "DeepSeek Flash";
+            if (slug == "deepseek-v4-pro") return "DeepSeek V4 Pro";
+            if (string.IsNullOrWhiteSpace(displayName)) return (slug ?? "").Replace('-', ' ');
+            return displayName.Replace('-', ' ').Trim();
+        }
+
+        /// <summary>
+        /// Returns the old executable path when config.toml still points at a previous location of
+        /// this program, which would leave Codex unable to fetch the API key.
+        /// </summary>
+        public string DetectStaleAuthCommand()
+        {
+            try
+            {
+                if (!File.Exists(ConfigPath)) return null;
+                string text = File.ReadAllText(ConfigPath, Encoding.UTF8);
+                if (text.IndexOf(BeginMarker, StringComparison.Ordinal) < 0) return null;
+                string expected = executablePath.Replace('\\', '/');
+                foreach (Match match in Regex.Matches(text, "(?m)^\\s*command\\s*=\\s*\"([^\"]+)\""))
+                {
+                    string value = match.Groups[1].Value;
+                    if (!value.EndsWith("CodexModelSwitcher.exe", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!string.Equals(value, expected, StringComparison.OrdinalIgnoreCase)) return value;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("检查取密钥路径失败", ex);
+            }
+            return null;
+        }
+
+        /// <summary>Rewrites stale取密钥 paths to the current executable; returns true when it changed something.</summary>
+        public bool RepairAuthCommand()
+        {
+            string stale = DetectStaleAuthCommand();
+            if (stale == null) return false;
+            string current = File.ReadAllText(ConfigPath, Encoding.UTF8);
+            string expected = executablePath.Replace('\\', '/');
+            string updated = Regex.Replace(
+                current,
+                "(?m)^(\\s*command\\s*=\\s*\")" + Regex.Escape(stale) + "(\"\\s*)$",
+                "${1}" + expected.Replace("$", "$$") + "${2}");
+            if (string.Equals(updated, current, StringComparison.Ordinal)) return false;
+            Backup(current, true);
+            WriteAtomic(ConfigPath, updated);
+            Log.Info("已修复取密钥命令路径：" + stale + " → " + expected);
+            return true;
         }
 
         private string EnsureCustomCatalog(ProviderProfile profile)
@@ -1771,23 +2313,45 @@ namespace CodexModelSwitcher
             string dir = Path.GetDirectoryName(path);
             Directory.CreateDirectory(dir);
             string temp = path + ".cms-tmp";
-            File.WriteAllText(temp, content, new UTF8Encoding(false));
-            if (File.Exists(path))
+            Exception last = null;
+            for (int attempt = 0; attempt < 3; attempt++)
             {
-                string old = path + ".cms-old";
-                if (File.Exists(old)) File.Delete(old);
-                File.Replace(temp, path, old, true);
-                File.Delete(old);
+                try
+                {
+                    File.WriteAllText(temp, content, new UTF8Encoding(false));
+                    if (File.Exists(path))
+                    {
+                        string old = path + ".cms-old";
+                        if (File.Exists(old)) File.Delete(old);
+                        File.Replace(temp, path, old, true);
+                        File.Delete(old);
+                    }
+                    else
+                    {
+                        File.Move(temp, path);
+                    }
+                    return;
+                }
+                catch (IOException ex)
+                {
+                    last = ex;
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    last = ex;
+                }
+                Thread.Sleep(150 * (attempt + 1));
             }
-            else
-            {
-                File.Move(temp, path);
-            }
+            throw new InvalidOperationException("写入配置失败：" + (last == null ? "未知原因" : last.Message), last);
         }
 
-        private static string DisplayName(string model)
+        private string DisplayName(string model)
         {
-            return model == "deepseek-v4-pro" ? "DeepSeek V4 Pro" : "DeepSeek Flash";
+            foreach (ModelOption option in LoadModelOptions())
+            {
+                if (option.Slug == model) return option.DisplayName;
+            }
+            return model;
         }
 
         private static string Normalize(string text)
@@ -1866,9 +2430,71 @@ namespace CodexModelSwitcher
 
     internal static class CodexLauncher
     {
+        private static readonly string[] ProcessNames = new string[] { "ChatGPT", "Codex", "codex" };
+
+        private static List<Process> RunningProcesses()
+        {
+            List<Process> processes = new List<Process>();
+            foreach (string name in ProcessNames)
+            {
+                try { processes.AddRange(Process.GetProcessesByName(name)); }
+                catch (Exception ex) { Log.Warn("枚举进程 " + name + " 失败", ex); }
+            }
+            return processes;
+        }
+
         public static bool IsRunning()
         {
-            return Process.GetProcessesByName("ChatGPT").Length > 0;
+            List<Process> processes = RunningProcesses();
+            int count = processes.Count;
+            foreach (Process process in processes)
+            {
+                try { process.Dispose(); } catch { }
+            }
+            return count > 0;
+        }
+
+        /// <summary>
+        /// Asks every Codex window to close and waits. Returns true when nothing is left running.
+        /// </summary>
+        public static bool TryCloseAll(int timeoutMs)
+        {
+            List<Process> processes = RunningProcesses();
+            if (processes.Count == 0) return true;
+            foreach (Process process in processes)
+            {
+                try
+                {
+                    if (process.MainWindowHandle != IntPtr.Zero) process.CloseMainWindow();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("请求关闭 Codex 失败（PID " + process.Id + "）", ex);
+                }
+            }
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            while (DateTime.UtcNow < deadline)
+            {
+                bool alive = false;
+                foreach (Process process in processes)
+                {
+                    try { if (!process.HasExited) { alive = true; break; } } catch { }
+                }
+                if (!alive) return true;
+                Thread.Sleep(250);
+            }
+            return !IsRunning();
+        }
+
+        /// <summary>Force-terminates Codex; only called after the user explicitly confirms.</summary>
+        public static void KillAll()
+        {
+            foreach (Process process in RunningProcesses())
+            {
+                try { process.Kill(); }
+                catch (Exception ex) { Log.Warn("强制结束 Codex 失败（PID " + process.Id + "）", ex); }
+            }
+            Log.Warn("已按用户确认强制结束 Codex 进程");
         }
 
         public static void Launch()
@@ -1930,6 +2556,312 @@ namespace CodexModelSwitcher
         }
     }
 
+    /// <summary>Small rolling file log so failures are diagnosable after the fact.</summary>
+    internal static class Log
+    {
+        private const long MaxBytes = 1024 * 1024;
+        private const int KeepFiles = 7;
+        private static readonly object Gate = new object();
+
+        public static string DirectoryPath
+        {
+            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "CodexModelSwitcher", "logs"); }
+        }
+
+        public static string CurrentFilePath
+        {
+            get { return Path.Combine(DirectoryPath, "switcher-" + DateTime.Now.ToString("yyyyMMdd") + ".log"); }
+        }
+
+        public static void Info(string message) { Write("INFO ", message, null); }
+        public static void Warn(string message) { Write("WARN ", message, null); }
+        public static void Warn(string message, Exception error) { Write("WARN ", message, error); }
+        public static void Error(string message, Exception error) { Write("ERROR", message, error); }
+
+        private static void Write(string level, string message, Exception error)
+        {
+            try
+            {
+                lock (Gate)
+                {
+                    Directory.CreateDirectory(DirectoryPath);
+                    Rotate();
+                    StringBuilder line = new StringBuilder();
+                    line.Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"));
+                    line.Append(" [").Append(level).Append("] ").Append(message);
+                    if (error != null) line.Append(Environment.NewLine).Append(error);
+                    line.Append(Environment.NewLine);
+                    File.AppendAllText(CurrentFilePath, line.ToString(), new UTF8Encoding(false));
+                }
+            }
+            catch
+            {
+                // Logging must never take the application down.
+            }
+        }
+
+        private static void Rotate()
+        {
+            FileInfo current = new FileInfo(CurrentFilePath);
+            if (!current.Exists || current.Length < MaxBytes) return;
+            try { File.Move(CurrentFilePath, Path.Combine(DirectoryPath, "switcher-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".log")); }
+            catch { return; }
+
+            string[] files = Directory.GetFiles(DirectoryPath, "switcher-*.log");
+            if (files.Length <= KeepFiles) return;
+            Array.Sort(files, delegate(string a, string b) { return File.GetLastWriteTimeUtc(b).CompareTo(File.GetLastWriteTimeUtc(a)); });
+            for (int i = KeepFiles; i < files.Length; i++)
+            {
+                try { File.Delete(files[i]); } catch { }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Minimal JSON reader. Enough to read provider balance/usage payloads without pulling in
+    /// extra framework references, and deliberately strict: anything malformed fails the parse
+    /// instead of producing half-guessed values.
+    /// </summary>
+    internal static class Json
+    {
+        public static bool TryParse(string text, out object value)
+        {
+            value = null;
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            int index = 0;
+            try
+            {
+                object parsed = ParseValue(text, ref index);
+                Skip(text, ref index);
+                if (index != text.Length) return false;
+                value = parsed;
+                return true;
+            }
+            catch
+            {
+                value = null;
+                return false;
+            }
+        }
+
+        public static Dictionary<string, object> Object(object node)
+        {
+            return node as Dictionary<string, object>;
+        }
+
+        public static List<object> Array(object node)
+        {
+            return node as List<object>;
+        }
+
+        public static object Member(object node, string key)
+        {
+            Dictionary<string, object> map = Object(node);
+            if (map == null) return null;
+            object value;
+            return map.TryGetValue(key, out value) ? value : null;
+        }
+
+        public static string Text(object node)
+        {
+            if (node == null) return null;
+            if (node is string) return (string)node;
+            if (node is bool) return ((bool)node) ? "true" : "false";
+            if (node is double)
+            {
+                double number = (double)node;
+                if (Math.Abs(number) < 1e15 && number == Math.Floor(number)) return ((long)number).ToString(CultureInfo.InvariantCulture);
+                return number.ToString("0.####", CultureInfo.InvariantCulture);
+            }
+            return null;
+        }
+
+        public static string TextAt(object node, string firstKey, string secondKey)
+        {
+            object value = Member(node, firstKey);
+            if (value == null && secondKey != null) value = Member(node, secondKey);
+            return Text(value);
+        }
+
+        /// <summary>
+        /// Flattens scalar values into human-readable "name: value" pairs, preferring keys that
+        /// look like balance/quota/usage numbers. Used for provider usage endpoints whose shape
+        /// we cannot know in advance.
+        /// </summary>
+        public static List<string> Highlights(object root, int maxItems)
+        {
+            List<string> preferred = new List<string>();
+            List<string> others = new List<string>();
+            Collect(root, null, preferred, others);
+            List<string> result = new List<string>();
+            foreach (string item in preferred)
+            {
+                if (result.Count >= maxItems) return result;
+                result.Add(item);
+            }
+            foreach (string item in others)
+            {
+                if (result.Count >= maxItems) return result;
+                result.Add(item);
+            }
+            return result;
+        }
+
+        private static readonly string[] InterestingWords = new string[]
+        {
+            "balance", "credit", "quota", "limit", "remain", "usage", "used", "total", "amount", "available", "left"
+        };
+
+        private static void Collect(object node, string name, List<string> preferred, List<string> others)
+        {
+            Dictionary<string, object> map = Object(node);
+            if (map != null)
+            {
+                foreach (KeyValuePair<string, object> pair in map)
+                {
+                    if (pair.Key.StartsWith("@", StringComparison.Ordinal) || pair.Key.StartsWith("_", StringComparison.Ordinal)) continue;
+                    Collect(pair.Value, pair.Key, preferred, others);
+                }
+                return;
+            }
+            List<object> array = Array(node);
+            if (array != null)
+            {
+                foreach (object item in array) Collect(item, name, preferred, others);
+                return;
+            }
+            string text = Text(node);
+            if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(name)) return;
+            if (text.Length > 60) text = text.Substring(0, 57) + "…";
+            string entry = name + ": " + text;
+            foreach (string word in InterestingWords)
+            {
+                if (name.IndexOf(word, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    preferred.Add(entry);
+                    return;
+                }
+            }
+            others.Add(entry);
+        }
+
+        private static void Skip(string text, ref int index)
+        {
+            while (index < text.Length && char.IsWhiteSpace(text[index])) index++;
+        }
+
+        private static object ParseValue(string text, ref int index)
+        {
+            Skip(text, ref index);
+            if (index >= text.Length) throw new FormatException("JSON 意外结束");
+            char c = text[index];
+            if (c == '{') return ParseObject(text, ref index);
+            if (c == '[') return ParseArray(text, ref index);
+            if (c == '"') return ParseString(text, ref index);
+            if (c == 't') { Expect(text, ref index, "true"); return true; }
+            if (c == 'f') { Expect(text, ref index, "false"); return false; }
+            if (c == 'n') { Expect(text, ref index, "null"); return null; }
+            return ParseNumber(text, ref index);
+        }
+
+        private static Dictionary<string, object> ParseObject(string text, ref int index)
+        {
+            Dictionary<string, object> map = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            index++;
+            Skip(text, ref index);
+            if (index < text.Length && text[index] == '}') { index++; return map; }
+            while (true)
+            {
+                Skip(text, ref index);
+                if (index >= text.Length || text[index] != '"') throw new FormatException("JSON 对象缺少键名");
+                string key = ParseString(text, ref index);
+                Skip(text, ref index);
+                if (index >= text.Length || text[index] != ':') throw new FormatException("JSON 对象缺少冒号");
+                index++;
+                map[key] = ParseValue(text, ref index);
+                Skip(text, ref index);
+                if (index >= text.Length) throw new FormatException("JSON 对象未闭合");
+                if (text[index] == ',') { index++; continue; }
+                if (text[index] == '}') { index++; return map; }
+                throw new FormatException("JSON 对象中出现意外字符");
+            }
+        }
+
+        private static List<object> ParseArray(string text, ref int index)
+        {
+            List<object> list = new List<object>();
+            index++;
+            Skip(text, ref index);
+            if (index < text.Length && text[index] == ']') { index++; return list; }
+            while (true)
+            {
+                list.Add(ParseValue(text, ref index));
+                Skip(text, ref index);
+                if (index >= text.Length) throw new FormatException("JSON 数组未闭合");
+                if (text[index] == ',') { index++; continue; }
+                if (text[index] == ']') { index++; return list; }
+                throw new FormatException("JSON 数组中出现意外字符");
+            }
+        }
+
+        private static string ParseString(string text, ref int index)
+        {
+            StringBuilder builder = new StringBuilder();
+            index++;
+            while (index < text.Length)
+            {
+                char c = text[index++];
+                if (c == '"') return builder.ToString();
+                if (c != '\\') { builder.Append(c); continue; }
+                if (index >= text.Length) break;
+                char escape = text[index++];
+                switch (escape)
+                {
+                    case '"': builder.Append('"'); break;
+                    case '\\': builder.Append('\\'); break;
+                    case '/': builder.Append('/'); break;
+                    case 'b': builder.Append('\b'); break;
+                    case 'f': builder.Append('\f'); break;
+                    case 'n': builder.Append('\n'); break;
+                    case 'r': builder.Append('\r'); break;
+                    case 't': builder.Append('\t'); break;
+                    case 'u':
+                        if (index + 4 > text.Length) throw new FormatException("JSON 转义不完整");
+                        builder.Append((char)Convert.ToInt32(text.Substring(index, 4), 16));
+                        index += 4;
+                        break;
+                    default: throw new FormatException("JSON 中出现未知转义");
+                }
+            }
+            throw new FormatException("JSON 字符串未闭合");
+        }
+
+        private static double ParseNumber(string text, ref int index)
+        {
+            int start = index;
+            while (index < text.Length && (char.IsDigit(text[index]) || text[index] == '-' || text[index] == '+' || text[index] == '.' || text[index] == 'e' || text[index] == 'E')) index++;
+            string token = text.Substring(start, index - start);
+            double value;
+            if (token.Length == 0 || !double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+                throw new FormatException("JSON 中出现非法数字");
+            return value;
+        }
+
+        private static void Expect(string text, ref int index, string literal)
+        {
+            if (index + literal.Length > text.Length || string.CompareOrdinal(text, index, literal, 0, literal.Length) != 0)
+                throw new FormatException("JSON 中出现非法字面量");
+            index += literal.Length;
+        }
+    }
+
+    internal sealed class ModelOption
+    {
+        public string Slug;
+        public string DisplayName;
+        public string Description;
+    }
+
     internal static class SelfTest
     {
         public static void Run()
@@ -1974,6 +2906,8 @@ namespace CodexModelSwitcher
                 Assert(parsedLimits.PlanType == "plus", "ChatGPT plan type was not parsed");
                 Assert(parsedLimits.Primary != null && parsedLimits.Primary.UsedPercent == 69 && parsedLimits.Primary.DurationMinutes == 300, "Primary ChatGPT limit was not parsed");
                 Assert(parsedLimits.Secondary != null && parsedLimits.Secondary.UsedPercent == 11 && parsedLimits.Secondary.DurationMinutes == 10080, "Secondary ChatGPT limit was not parsed");
+
+                RunV16Checks(codex, data);
             }
             finally
             {
@@ -1984,6 +2918,65 @@ namespace CodexModelSwitcher
         private static void Assert(bool value, string message)
         {
             if (!value) throw new InvalidOperationException(message);
+        }
+
+        /// <summary>Covers the 1.6 additions: JSON reader, concurrent-edit guard, path repair, backup retention.</summary>
+        private static void RunV16Checks(string codex, string data)
+        {
+            object parsed;
+            Assert(Json.TryParse("{\"a\":[1,2,{\"b\":\"c\\u0041\"}],\"d\":true,\"e\":null}", out parsed), "JSON 解析失败");
+            Assert(Json.Text(Json.Member(parsed, "d")) == "true", "JSON 布尔解析错误");
+            List<object> array = Json.Array(Json.Member(parsed, "a"));
+            Assert(array != null && array.Count == 3, "JSON 数组解析错误");
+            Assert(Json.Text(Json.Member(array[2], "b")) == "cA", "JSON 转义解析错误");
+            Assert(!Json.TryParse("{bad}", out parsed), "损坏的 JSON 未被拒绝");
+            Assert(!Json.TryParse("{\"a\":1} trailing", out parsed), "带尾部内容的 JSON 未被拒绝");
+            Assert(!Json.TryParse("", out parsed), "空串不应被当作 JSON");
+
+            string catalogSample = "{\"currency\":\"CNY\",\"balance_infos\":[{\"total_balance\":\"42.50\",\"granted_balance\":\"2.50\",\"topped_up_balance\":\"40.00\",\"currency\":\"CNY\"}]}";
+            Assert(Json.TryParse(catalogSample, out parsed), "余额样例解析失败");
+            List<string> highlights = Json.Highlights(parsed, 6);
+            Assert(highlights.Count > 0, "用量摘要为空");
+            Assert(string.Join(" ", highlights.ToArray()).Contains("total_balance: 42.5"), "用量摘要未包含余额");
+
+            string configPath = Path.Combine(codex, "config.toml");
+            string snapshot = File.ReadAllText(configPath);
+            File.AppendAllText(configPath, "# changed by another program" + Environment.NewLine);
+            bool blocked = false;
+            try { Switcher.EnsureUnchanged(configPath, snapshot, true); }
+            catch (InvalidOperationException) { blocked = true; }
+            Assert(blocked, "并发修改配置未被拦截");
+            File.WriteAllText(configPath, snapshot, new UTF8Encoding(false));
+            Switcher.EnsureUnchanged(configPath, snapshot, true);
+
+            Switcher first = new Switcher(codex, data, @"C:\Tools\One\CodexModelSwitcher.exe", false);
+            first.ActivateDeepSeek("deepseek-flash");
+            Assert(first.IsApiKeyMode(), "DeepSeek 模式未被识别为 API Key 模式");
+            Switcher moved = new Switcher(codex, data, @"C:\Tools\Two\CodexModelSwitcher.exe", false);
+            Assert(moved.DetectStaleAuthCommand() != null, "未检测到失效的取密钥路径");
+            Assert(moved.RepairAuthCommand(), "未能修复取密钥路径");
+            Assert(File.ReadAllText(configPath).Contains("C:/Tools/Two/CodexModelSwitcher.exe"), "修复后的取密钥路径不正确");
+            Assert(moved.DetectStaleAuthCommand() == null, "修复后仍报告失效路径");
+            Assert(moved.RepairAuthCommand() == false, "无失效路径时不应再改动配置");
+
+            for (int i = 0; i < 24; i++) moved.ActivateDeepSeek("deepseek-flash");
+            string[] backups = Directory.GetFiles(Path.Combine(data, "backups"), "config-*");
+            Assert(backups.Length <= 20, "备份数量没有按上限清理，当前 " + backups.Length + " 份");
+            Assert(Directory.GetFiles(codex, "config.toml.cms-tmp").Length == 0, "临时文件未被清理");
+            Assert(Directory.GetFiles(codex, "config.toml.cms-old").Length == 0, "临时文件未被清理");
+
+            List<ModelOption> builtIn = new Switcher(codex, data, "x", false).LoadModelOptions();
+            Assert(builtIn.Count == 2 && builtIn[0].Slug == "deepseek-flash", "内置模型列表不正确");
+            string catalogPath = Path.Combine(data, "deepseek-models.json");
+            File.WriteAllText(catalogPath,
+                "{\"models\":[{\"slug\":\"deepseek-flash\",\"display_name\":\"DeepSeek Flash\"}," +
+                "{\"slug\":\"deepseek-v4-pro\",\"display_name\":\"DeepSeek V4 Pro\"}," +
+                "{\"slug\":\"deepseek-next\",\"display_name\":\"DeepSeek Next\"}]}", new UTF8Encoding(false));
+            Switcher catalogDriven = new Switcher(codex, data, "x", false);
+            List<ModelOption> options = catalogDriven.LoadModelOptions();
+            Assert(options.Count == 3 && options[2].Slug == "deepseek-next", "目录驱动的模型列表不正确");
+            Assert(catalogDriven.IsKnownDeepSeekModel("deepseek-next"), "目录中的新模型未被识别");
+            Assert(!catalogDriven.IsKnownDeepSeekModel("deepseek-unknown"), "未知模型不应被识别");
         }
     }
 }
