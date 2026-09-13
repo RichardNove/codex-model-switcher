@@ -16,7 +16,7 @@ namespace CodexModelSwitcher
 {
     internal static class Program
     {
-        internal const string Version = "1.6";
+        internal const string Version = "1.7";
 
         [DllImport("shcore.dll")]
         private static extern int SetProcessDpiAwareness(int awareness);
@@ -156,9 +156,8 @@ namespace CodexModelSwitcher
         private static readonly Color Canvas = Color.FromArgb(245, 245, 247);
         private static readonly Color Blue = Color.FromArgb(0, 113, 227);
         private static readonly Color Teal = Color.FromArgb(0, 145, 130);
-        private readonly TextBox keyBox;
         private readonly Label statusLabel;
-        private readonly Label keyStatusLabel;
+        private readonly Label hintLabel;
         private readonly Switcher switcher;
         private readonly Panel contentPanel;
         private readonly FlowLayoutPanel cardsPanel;
@@ -169,8 +168,8 @@ namespace CodexModelSwitcher
         {
             Text = "Codex 模型启动器";
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(1080, 750);
-            MinimumSize = new Size(900, 700);
+            ClientSize = new Size(1080, 500);
+            MinimumSize = new Size(900, 460);
             FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = true;
             AutoScroll = true;
@@ -184,7 +183,7 @@ namespace CodexModelSwitcher
             switcher = new Switcher();
 
             contentPanel = new Panel();
-            contentPanel.Size = new Size(1080, 720);
+            contentPanel.Size = new Size(1080, 500);
             contentPanel.BackColor = Canvas;
             Controls.Add(contentPanel);
             AutoScrollMinSize = contentPanel.Size;
@@ -218,91 +217,45 @@ namespace CodexModelSwitcher
             usageButton.Click += delegate { using (UsageForm form = new UsageForm()) form.ShowDialog(this); };
             contentPanel.Controls.Add(usageButton);
 
-            RoundedButton importButton = SmallButton("导入模型  +", Ink, 120);
+            RoundedButton importButton = SmallButton("模型配置", Ink, 120);
             importButton.Location = new Point(920, 43);
-            importButton.Click += delegate { using (ModelManagerForm form = new ModelManagerForm(switcher)) form.ShowDialog(this); };
+            importButton.Click += delegate { OpenModelSettings(); };
             contentPanel.Controls.Add(importButton);
 
             cardsPanel = new FlowLayoutPanel();
             cardsPanel.Location = new Point(40, 126);
             cardsPanel.Size = new Size(1000, 232);
             cardsPanel.BackColor = Canvas;
-            cardsPanel.WrapContents = true;
+            cardsPanel.WrapContents = false;
             cardsPanel.AutoScroll = true;
             cardsPanel.Padding = new Padding(0);
             cardsPanel.Margin = new Padding(0);
             contentPanel.Controls.Add(cardsPanel);
             BuildCards();
 
-            RoundedPanel keyPanel = new RoundedPanel();
-            keyPanel.Location = new Point(40, 382);
-            keyPanel.Size = new Size(1000, 206);
-            keyPanel.BackColor = Color.White;
-            keyPanel.BorderColor = Color.FromArgb(225, 225, 230);
-            keyPanel.Radius = 22;
-            contentPanel.Controls.Add(keyPanel);
-
-            Label keyTitle = NewLabel("DeepSeek API Key", 14F, FontStyle.Bold, Ink);
-            keyTitle.Location = new Point(28, 18);
-            keyTitle.Size = new Size(320, 40);
-            keyPanel.Controls.Add(keyTitle);
-
-            keyStatusLabel = NewLabel("", 8.8F, FontStyle.Bold, Muted);
-            keyStatusLabel.Location = new Point(28, 56);
-            keyStatusLabel.Size = new Size(520, 30);
-            keyPanel.Controls.Add(keyStatusLabel);
-
-            keyBox = new TextBox();
-            keyBox.Location = new Point(28, 94);
-            keyBox.Size = new Size(594, 34);
-            keyBox.Font = new Font("Consolas", 11F);
-            keyBox.UseSystemPasswordChar = true;
-            keyBox.BorderStyle = BorderStyle.FixedSingle;
-            keyPanel.Controls.Add(keyBox);
-
-            RoundedButton saveButton = SmallButton("安全保存", Blue, 132);
-            saveButton.Location = new Point(646, 89);
-            saveButton.Click += delegate { SaveKey(); };
-            keyPanel.Controls.Add(saveButton);
-
-            RoundedButton testButton = SmallButton("测试连接", Color.FromArgb(73, 73, 78), 132);
-            testButton.Location = new Point(794, 89);
-            testButton.Click += delegate { TestConnection(); };
-            keyPanel.Controls.Add(testButton);
-
-            Label privacyIcon = NewLabel("◆", 8F, FontStyle.Bold, Blue);
-            privacyIcon.Location = new Point(28, 158);
-            privacyIcon.Size = new Size(18, 20);
-            keyPanel.Controls.Add(privacyIcon);
-
-            Label privacy = NewLabel("密钥由 Windows 当前用户加密保存，不会以明文写入 Codex 配置。", 8.8F, FontStyle.Regular, Muted);
-            privacy.Location = new Point(50, 151);
-            privacy.Size = new Size(890, 36);
-            privacy.TextAlign = ContentAlignment.MiddleLeft;
-            keyPanel.Controls.Add(privacy);
-
-            Label restartHint = NewLabel("切换配置后可以自动重启 Codex 让新配置生效；也可以随时点右下角手动打开。", 8.7F, FontStyle.Regular, Muted);
-            restartHint.Location = new Point(44, 614);
-            restartHint.Size = new Size(760, 32);
-            contentPanel.Controls.Add(restartHint);
+            hintLabel = NewLabel("", 8.7F, FontStyle.Regular, Muted);
+            hintLabel.Location = new Point(44, 384);
+            hintLabel.Size = new Size(900, 30);
+            hintLabel.TextAlign = ContentAlignment.MiddleLeft;
+            contentPanel.Controls.Add(hintLabel);
 
             statusLabel = NewLabel("就绪 · 请选择一个模型", 9.5F, FontStyle.Bold, Muted);
-            statusLabel.Location = new Point(44, 656);
+            statusLabel.Location = new Point(44, 420);
             statusLabel.Size = new Size(700, 42);
             statusLabel.TextAlign = ContentAlignment.MiddleLeft;
             contentPanel.Controls.Add(statusLabel);
 
             RoundedButton logButton = SmallButton("日志", Color.FromArgb(99, 99, 102), 84);
-            logButton.Location = new Point(766, 657);
+            logButton.Location = new Point(766, 421);
             logButton.Click += delegate { OpenLogFolder(); };
             contentPanel.Controls.Add(logButton);
 
             RoundedButton openButton = SmallButton("打开 Codex  →", Ink, 174);
-            openButton.Location = new Point(866, 657);
+            openButton.Location = new Point(866, 421);
             openButton.Click += delegate { OpenCodex(); };
             contentPanel.Controls.Add(openButton);
 
-            UpdateKeyStatus();
+            UpdateKeyHint();
             PositionContent();
             CheckAuthCommandPath();
             RefreshCatalogInBackground();
@@ -315,7 +268,7 @@ namespace CodexModelSwitcher
             try
             {
                 const float designWidth = 1080F;
-                const float designHeight = 720F;
+                const float designHeight = 500F;
                 float targetScale = Math.Min(ClientSize.Width / designWidth, ClientSize.Height / designHeight);
                 targetScale = Math.Max(0.72F, targetScale);
                 if (Math.Abs(targetScale - contentScale) > 0.002F)
@@ -353,8 +306,8 @@ namespace CodexModelSwitcher
         private ProviderCard CreateCard(string glyph, string title, string description, Color accent, EventHandler click)
         {
             ProviderCard card = new ProviderCard();
-            card.Size = new Size(313, 230);
-            card.Margin = new Padding(0, 0, 20, 0);
+            card.Size = new Size(300, 230);
+            card.Margin = new Padding(0, 0, 18, 0);
             card.Glyph = glyph;
             card.TitleText = title;
             card.DescriptionText = description;
@@ -471,52 +424,11 @@ namespace CodexModelSwitcher
             return button;
         }
 
-        private void SaveKey()
+        /// <summary>Opens the model/key settings dialog and refreshes the summary afterwards.</summary>
+        private void OpenModelSettings()
         {
-            string key = keyBox.Text.Trim();
-            if (!key.StartsWith("sk-", StringComparison.Ordinal))
-            {
-                MessageBox.Show(this, "DeepSeek API Key 应以 sk- 开头。", "格式不正确", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            try
-            {
-                SecretStore.Save(key);
-                keyBox.Clear();
-                UpdateKeyStatus();
-                SetStatus("DeepSeek API Key 已加密保存。", Teal);
-            }
-            catch (Exception ex)
-            {
-                ShowError("保存密钥失败", ex);
-            }
-        }
-
-        private void TestConnection()
-        {
-            if (!SecretStore.Exists())
-            {
-                MessageBox.Show(this, "请先输入并保存 DeepSeek API Key。", "尚未配置", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-            Cursor = Cursors.WaitCursor;
-            SetStatus("正在测试 DeepSeek API…", Blue);
-            Application.DoEvents();
-            try
-            {
-                DeepSeekApi.Test(SecretStore.Load("deepseek"));
-                SetStatus("DeepSeek API 连接成功。", Teal);
-                MessageBox.Show(this, "连接成功，API Key 可用。", "DeepSeek", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            catch (Exception ex)
-            {
-                SetStatus("连接测试失败。", Color.Firebrick);
-                ShowError("DeepSeek API 连接失败", ex);
-            }
-            finally
-            {
-                Cursor = Cursors.Default;
-            }
+            using (ModelManagerForm form = new ModelManagerForm(switcher)) form.ShowDialog(this);
+            UpdateKeyHint();
         }
 
         private void ActivateOpenAI()
@@ -537,8 +449,8 @@ namespace CodexModelSwitcher
         {
             if (!SecretStore.Exists())
             {
-                MessageBox.Show(this, "请先在下方输入并安全保存 DeepSeek API Key。", "需要 API Key", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                keyBox.Focus();
+                MessageBox.Show(this, "还没有配置 DeepSeek API Key。\r\n\r\n现在打开「模型配置」填写吗？", "需要 API Key", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                OpenModelSettings();
                 return;
             }
             Cursor = Cursors.WaitCursor;
@@ -574,7 +486,9 @@ namespace CodexModelSwitcher
         private void RestartCodex()
         {
             DialogResult answer = MessageBox.Show(this,
-                "配置已切换。Codex 需要完全退出后重新打开才会读取新配置。\r\n\r\n现在自动重启 Codex 吗？\r\n（Codex 中尚未发送的内容可能会丢失）",
+                "配置已切换。Codex 需要完全退出后重新打开才会读取新配置。\r\n\r\n" +
+                "Codex 关闭后通常会继续驻留在托盘，所以启动器会先请它正常退出，若它仍驻留则直接结束它的进程。\r\n\r\n" +
+                "现在重启 Codex 吗？（Codex 中尚未发送的内容可能会丢失）",
                 "重启 Codex", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
             if (answer != DialogResult.Yes)
             {
@@ -583,22 +497,20 @@ namespace CodexModelSwitcher
             }
 
             Cursor = Cursors.WaitCursor;
-            SetStatus("正在关闭 Codex…", Blue);
+            SetStatus("正在请 Codex 正常退出…", Blue);
             Application.DoEvents();
             try
             {
-                if (!CodexLauncher.TryCloseAll(10000))
+                if (!CodexLauncher.TryCloseAll(5000))
                 {
-                    DialogResult force = MessageBox.Show(this,
-                        "Codex 没有响应关闭请求，可能仍驻留在托盘里。\r\n\r\n强制结束它的进程吗？未保存的内容会丢失。",
-                        "Codex 未退出", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
-                    if (force != DialogResult.Yes)
-                    {
-                        SetStatus("已取消重启 · 请手动从托盘退出 Codex", Color.Firebrick);
-                        return;
-                    }
+                    SetStatus("Codex 仍在托盘中驻留，正在结束它的进程…", Blue);
+                    Application.DoEvents();
                     CodexLauncher.KillAll();
-                    Thread.Sleep(1200);
+                    CodexLauncher.WaitUntilStopped(6000);
+                }
+                else
+                {
+                    CodexLauncher.WaitUntilStopped(3000);
                 }
                 OpenCodex();
                 SetStatus("已重启 Codex · 新配置已生效", Teal);
@@ -626,12 +538,14 @@ namespace CodexModelSwitcher
             }
         }
 
-        private void UpdateKeyStatus()
+        /// <summary>One-line summary of the DeepSeek credential; the editor now lives in the settings dialog.</summary>
+        private void UpdateKeyHint()
         {
-            keyStatusLabel.Text = SecretStore.Exists()
-                ? "已配置密钥（当前 Windows 用户加密保存）"
-                : "尚未配置密钥";
-            keyStatusLabel.ForeColor = SecretStore.Exists() ? Teal : Muted;
+            bool configured = SecretStore.Exists();
+            hintLabel.Text = configured
+                ? "DeepSeek 密钥：已配置（Windows 当前用户加密保存）· 在「模型配置」中管理"
+                : "DeepSeek 密钥：尚未配置 · 点击右上角「模型配置」填写";
+            hintLabel.ForeColor = configured ? Teal : Color.FromArgb(190, 45, 45);
         }
 
         private void SetStatus(string text, Color color)
@@ -676,7 +590,7 @@ namespace CodexModelSwitcher
                 contentPanel.Scale(new SizeF(inverse, inverse));
                 contentPanel.ResumeLayout(true);
             }
-            contentPanel.Size = new Size(1080, 720);
+            contentPanel.Size = new Size(1080, 500);
             contentScale = 1F;
         }
     }
@@ -691,6 +605,8 @@ namespace CodexModelSwitcher
         private readonly TextBox keyBox;
         private readonly TextBox usageUrlBox;
         private readonly Label statusLabel;
+        private readonly TextBox deepSeekKeyBox;
+        private readonly Label deepSeekStatusLabel;
         private readonly Panel contentPanel;
         private ProviderProfile current;
         private float contentScale = 1F;
@@ -699,25 +615,41 @@ namespace CodexModelSwitcher
         public ModelManagerForm(Switcher modelSwitcher)
         {
             switcher = modelSwitcher;
-            Text = "导入与管理模型";
+            Text = "模型配置";
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(900, 620);
-            MinimumSize = new Size(820, 600);
+            ClientSize = new Size(900, 780);
+            MinimumSize = new Size(820, 660);
             BackColor = Color.FromArgb(245, 245, 247);
             Font = new Font("Microsoft YaHei UI", 9F);
             AutoScaleMode = AutoScaleMode.Dpi;
             AutoScroll = true;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
-            contentPanel = new Panel { Size = new Size(900, 620), BackColor = Color.FromArgb(245, 245, 247) };
+            contentPanel = new Panel { Size = new Size(900, 780), BackColor = Color.FromArgb(245, 245, 247) };
             Controls.Add(contentPanel);
             AutoScrollMinSize = contentPanel.Size;
             Resize += delegate { PositionContent(); };
 
-            contentPanel.Controls.Add(LabelAt("导入与管理模型", 28F, FontStyle.Bold, Color.FromArgb(29, 29, 31), 32, 18, 600, 62));
-            contentPanel.Controls.Add(LabelAt("添加任何兼容 Responses API 的模型提供商", 9.5F, FontStyle.Regular, Color.FromArgb(110, 110, 115), 35, 82, 650, 30));
+            contentPanel.Controls.Add(LabelAt("模型配置", 28F, FontStyle.Bold, Color.FromArgb(29, 29, 31), 32, 18, 600, 62));
+            contentPanel.Controls.Add(LabelAt("DeepSeek 密钥，以及任何兼容 Responses API 的模型提供商", 9.5F, FontStyle.Regular, Color.FromArgb(110, 110, 115), 35, 82, 700, 30));
 
-            RoundedPanel left = PanelAt(30, 120, 250, 460);
+            RoundedPanel deepseek = PanelAt(30, 118, 840, 150);
+            contentPanel.Controls.Add(deepseek);
+            deepseek.Controls.Add(LabelAt("DeepSeek API Key", 12F, FontStyle.Bold, Color.FromArgb(29, 29, 31), 24, 12, 300, 32));
+            deepSeekStatusLabel = LabelAt("", 8.6F, FontStyle.Bold, Color.FromArgb(110, 110, 115), 24, 44, 500, 26);
+            deepseek.Controls.Add(deepSeekStatusLabel);
+            deepSeekKeyBox = InputAt(deepseek, 24, 74, 470);
+            deepSeekKeyBox.UseSystemPasswordChar = true;
+            deepSeekKeyBox.Font = new Font("Consolas", 10F);
+            RoundedButton saveKeyButton = ButtonAt("安全保存", Color.FromArgb(0, 113, 227), 510, 69, 130);
+            saveKeyButton.Click += delegate { SaveDeepSeekKey(); };
+            deepseek.Controls.Add(saveKeyButton);
+            RoundedButton testKeyButton = ButtonAt("测试连接", Color.FromArgb(73, 73, 78), 652, 69, 130);
+            testKeyButton.Click += delegate { TestDeepSeekKey(); };
+            deepseek.Controls.Add(testKeyButton);
+            deepseek.Controls.Add(LabelAt("密钥使用 Windows DPAPI 加密保存，不会以明文写入 Codex 配置。", 8.3F, FontStyle.Regular, Color.FromArgb(110, 110, 115), 24, 116, 780, 24));
+
+            RoundedPanel left = PanelAt(30, 290, 250, 445);
             contentPanel.Controls.Add(left);
             left.Controls.Add(LabelAt("已导入模型", 12F, FontStyle.Bold, Color.FromArgb(29, 29, 31), 20, 18, 190, 34));
             profileList = new ListBox();
@@ -731,7 +663,7 @@ namespace CodexModelSwitcher
             newButton.Click += delegate { ClearEditor(); };
             left.Controls.Add(newButton);
 
-            RoundedPanel editor = PanelAt(300, 120, 570, 460);
+            RoundedPanel editor = PanelAt(300, 290, 570, 445);
             contentPanel.Controls.Add(editor);
             editor.Controls.Add(LabelAt("提供商名称", 8.7F, FontStyle.Bold, Color.FromArgb(110, 110, 115), 24, 15, 180, 26));
             nameBox = InputAt(editor, 24, 42, 245);
@@ -764,9 +696,10 @@ namespace CodexModelSwitcher
             deleteButton.Click += delegate { DeleteProfile(); };
             editor.Controls.Add(deleteButton);
 
-            statusLabel = LabelAt("填写信息后保存；模型会存入当前 Windows 用户配置。", 8.8F, FontStyle.Bold, Color.FromArgb(110, 110, 115), 35, 585, 820, 30);
+            statusLabel = LabelAt("DeepSeek 密钥与模型都会保存到当前 Windows 用户的加密配置中。", 8.8F, FontStyle.Bold, Color.FromArgb(110, 110, 115), 35, 745, 820, 30);
             contentPanel.Controls.Add(statusLabel);
             LoadProfiles();
+            UpdateDeepSeekStatus();
             PositionContent();
         }
 
@@ -777,7 +710,7 @@ namespace CodexModelSwitcher
             try
             {
                 const float designWidth = 900F;
-                const float designHeight = 620F;
+                const float designHeight = 780F;
                 float targetScale = Math.Max(0.72F, Math.Min(ClientSize.Width / designWidth, ClientSize.Height / designHeight));
                 if (Math.Abs(targetScale - contentScale) > 0.002F)
                 {
@@ -910,6 +843,60 @@ namespace CodexModelSwitcher
         private void ShowError(Exception ex) { ShowStatus(ex.Message, Color.FromArgb(190, 45, 45)); MessageBox.Show(this, ex.Message, "操作失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         private void ShowStatus(string text, Color color) { statusLabel.Text = text; statusLabel.ForeColor = color; }
 
+        private void SaveDeepSeekKey()
+        {
+            string key = deepSeekKeyBox.Text.Trim();
+            if (!key.StartsWith("sk-", StringComparison.Ordinal))
+            {
+                ShowStatus("DeepSeek API Key 应以 sk- 开头。", Color.FromArgb(190, 45, 45));
+                return;
+            }
+            try
+            {
+                SecretStore.Save(key);
+                deepSeekKeyBox.Clear();
+                UpdateDeepSeekStatus();
+                ShowStatus("DeepSeek API Key 已加密保存。", Color.FromArgb(0, 145, 130));
+            }
+            catch (Exception ex)
+            {
+                ShowError(ex);
+            }
+        }
+
+        private void TestDeepSeekKey()
+        {
+            if (!SecretStore.Exists())
+            {
+                ShowStatus("请先保存 DeepSeek API Key。", Color.FromArgb(190, 45, 45));
+                return;
+            }
+            Cursor = Cursors.WaitCursor;
+            ShowStatus("正在测试 DeepSeek API…", Color.FromArgb(0, 113, 227));
+            Application.DoEvents();
+            try
+            {
+                string balance = DeepSeekApi.GetBalance(SecretStore.Load("deepseek"));
+                ShowStatus("DeepSeek 连接成功 · " + balance, Color.FromArgb(0, 145, 130));
+            }
+            catch (Exception ex)
+            {
+                ShowStatus("连接测试失败：" + ex.Message, Color.FromArgb(190, 45, 45));
+                Log.Warn("DeepSeek 连接测试失败", ex);
+            }
+            finally
+            {
+                Cursor = Cursors.Default;
+            }
+        }
+
+        private void UpdateDeepSeekStatus()
+        {
+            bool configured = SecretStore.Exists();
+            deepSeekStatusLabel.Text = configured ? "已配置密钥（Windows 当前用户加密保存）" : "尚未配置密钥";
+            deepSeekStatusLabel.ForeColor = configured ? Color.FromArgb(0, 145, 130) : Color.FromArgb(190, 45, 45);
+        }
+
         private const int WmDpiChanged = 0x02E0;
 
         protected override void WndProc(ref Message message)
@@ -937,7 +924,7 @@ namespace CodexModelSwitcher
                 contentPanel.Scale(new SizeF(inverse, inverse));
                 contentPanel.ResumeLayout(true);
             }
-            contentPanel.Size = new Size(900, 620);
+            contentPanel.Size = new Size(900, 780);
             contentScale = 1F;
         }
     }
@@ -2440,6 +2427,22 @@ namespace CodexModelSwitcher
     {
         private static readonly string[] ProcessNames = new string[] { "ChatGPT", "Codex", "codex" };
 
+        private const int WmClose = 0x0010;
+
+        private delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr parameter);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr window);
+
+        [DllImport("user32.dll")]
+        private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+
         private static List<Process> RunningProcesses()
         {
             List<Process> processes = new List<Process>();
@@ -2464,13 +2467,19 @@ namespace CodexModelSwitcher
 
         /// <summary>
         /// Asks every Codex window to close and waits. Returns true when nothing is left running.
+        ///
+        /// The desktop app is an Electron application: Process.MainWindowHandle reports 0 for all of
+        /// its processes, so the window has to be located by enumerating top-level windows instead.
         /// </summary>
         public static bool TryCloseAll(int timeoutMs)
         {
             List<Process> processes = RunningProcesses();
             if (processes.Count == 0) return true;
+
+            Dictionary<uint, bool> targets = new Dictionary<uint, bool>();
             foreach (Process process in processes)
             {
+                targets[(uint)process.Id] = true;
                 try
                 {
                     if (process.MainWindowHandle != IntPtr.Zero) process.CloseMainWindow();
@@ -2480,6 +2489,10 @@ namespace CodexModelSwitcher
                     Log.Warn("请求关闭 Codex 失败（PID " + process.Id + "）", ex);
                 }
             }
+
+            int posted = PostCloseToWindows(targets);
+            Log.Info("已向 " + posted + " 个 Codex 窗口发送关闭请求");
+
             DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
             while (DateTime.UtcNow < deadline)
             {
@@ -2494,6 +2507,30 @@ namespace CodexModelSwitcher
             return !IsRunning();
         }
 
+        /// <summary>Sends WM_CLOSE to every visible top-level window owned by the given processes.</summary>
+        private static int PostCloseToWindows(Dictionary<uint, bool> processIds)
+        {
+            int count = 0;
+            try
+            {
+                EnumWindows(delegate(IntPtr window, IntPtr parameter)
+                {
+                    uint owner;
+                    GetWindowThreadProcessId(window, out owner);
+                    if (!processIds.ContainsKey(owner)) return true;
+                    if (!IsWindowVisible(window)) return true;
+                    if (!PostMessage(window, WmClose, IntPtr.Zero, IntPtr.Zero)) return true;
+                    count++;
+                    return true;
+                }, IntPtr.Zero);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("枚举 Codex 窗口失败", ex);
+            }
+            return count;
+        }
+
         /// <summary>Force-terminates Codex; only called after the user explicitly confirms.</summary>
         public static void KillAll()
         {
@@ -2503,6 +2540,18 @@ namespace CodexModelSwitcher
                 catch (Exception ex) { Log.Warn("强制结束 Codex 失败（PID " + process.Id + "）", ex); }
             }
             Log.Warn("已按用户确认强制结束 Codex 进程");
+        }
+
+        /// <summary>Waits until no Codex process is left, so a relaunch cannot attach to a dying one.</summary>
+        public static bool WaitUntilStopped(int timeoutMs)
+        {
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (!IsRunning()) return true;
+                Thread.Sleep(200);
+            }
+            return !IsRunning();
         }
 
         public static void Launch()

@@ -4,7 +4,12 @@ A small Windows GUI launcher that switches the Codex desktop app between your Ch
 
 Codex 桌面端可以在界面里切换模型，但要在「ChatGPT 账号登录」和「第三方 API Key」之间来回切换，只能手改 `%USERPROFILE%\.codex\config.toml`。这个小工具把这件事变成点一下卡片：写入安全配置、备份原配置、然后打开 Codex。
 
-当前版本：1.6
+当前版本：1.7
+
+1.7 版：
+
+- **界面收起**：DeepSeek API Key 从主界面移到「模型配置」窗口，主界面只留一行状态提示，窗口高度从 720 降到 500。
+- **重启 Codex 一步到位**：Codex 桌面端是 Electron 应用，`MainWindowHandle` 对它始终返回 0，之前那句"请求正常关闭"根本没执行过。现在改用 `EnumWindows` 找到它真正可见的窗口再发 `WM_CLOSE`；确认框一次说清"正常关闭不成会直接结束进程"，不再需要第二次确认。
 
 1.6 版重点在稳定性：
 
@@ -23,7 +28,7 @@ Codex 桌面端可以在界面里切换模型，但要在「ChatGPT 账号登录
 - **DeepSeek Flash / DeepSeek V4 Pro**：写入 DeepSeek Responses API 提供商配置，API Key 加密保存。
 - **导入模型**：任何兼容 Responses API 的服务都能加进来，可保存、编辑、删除、测试和切换。
 - **用量概览**：每 5 分钟刷新。DeepSeek 显示账户余额；GPT 行通过官方 `codex app-server` 的只读 RPC 显示套餐类型、5 小时窗口、每周窗口的剩余百分比和重置时间。
-- **自动重启**：切换配置后询问是否退出并重新打开 Codex，新配置立即生效。
+- **自动重启**：切换配置后询问是否退出并重新打开 Codex。桌面端是 Electron 应用且会驻留托盘，启动器会先请它正常退出，仍驻留时直接结束进程，一次确认即可完成。
 - **可排障**：所有异常都会被拦截并写入滚动日志，不会让程序直接消失。
 - **安全**：API Key 用 Windows DPAPI 加密，只以密文存放；`config.toml` 里不会出现明文密钥。
 - **可回退**：每次切换前自动备份 `config.toml`（保留最近 20 份），随时可以切回 GPT 配置；MCP、项目信任等无关设置会被完整保留。
@@ -115,7 +120,7 @@ GPT 用量来自本机官方 `codex app-server`：启动它、完成 `initialize
 ## 已知限制
 
 - 需要 Codex 桌面端已在 Windows 上安装并至少启动过一次。
-- 切换配置后必须完全退出并重新打开 Codex 才会生效；自动重启依赖 Codex 响应关闭请求，如果它驻留在托盘不退出，启动器会询问是否强制结束进程。
+- 切换配置后必须完全退出并重新打开 Codex 才会生效。自动重启会按需结束 Codex 的进程，Codex 中尚未发送的内容可能因此丢失，所以确认框中默认选「否」。
 - 只支持兼容 Responses API 的第三方服务。
 - 发布版 EXE 未做代码签名。
 
