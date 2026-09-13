@@ -2145,7 +2145,15 @@ namespace CodexModelSwitcher
                 {
                     string value = match.Groups[1].Value;
                     if (!value.EndsWith("CodexModelSwitcher.exe", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (!string.Equals(value, expected, StringComparison.OrdinalIgnoreCase)) return value;
+                    if (string.Equals(value, expected, StringComparison.OrdinalIgnoreCase)) continue;
+                    // Only stale when the recorded program is really gone; otherwise the user may be
+                    // running another copy on purpose and we must not hijack the configuration.
+                    if (File.Exists(value.Replace('/', Path.DirectorySeparatorChar)))
+                    {
+                        Log.Info("配置中的取密钥命令指向另一个有效副本，保持不变：" + value);
+                        continue;
+                    }
+                    return value;
                 }
             }
             catch (Exception ex)
@@ -2952,6 +2960,16 @@ namespace CodexModelSwitcher
             Switcher first = new Switcher(codex, data, @"C:\Tools\One\CodexModelSwitcher.exe", false);
             first.ActivateDeepSeek("deepseek-flash");
             Assert(first.IsApiKeyMode(), "DeepSeek 模式未被识别为 API Key 模式");
+
+            // A recorded path that still exists must be left alone, even if it is not the current exe.
+            string survivingCopy = Path.Combine(data, "CodexModelSwitcher.exe");
+            File.WriteAllText(survivingCopy, "not a real binary", new UTF8Encoding(false));
+            new Switcher(codex, data, survivingCopy, false).ActivateDeepSeek("deepseek-flash");
+            Switcher otherBuild = new Switcher(codex, data, @"C:\Tools\Two\CodexModelSwitcher.exe", false);
+            Assert(otherBuild.DetectStaleAuthCommand() == null, "指向仍存在的副本时不应判定为失效");
+            Assert(!otherBuild.RepairAuthCommand(), "指向仍存在的副本时不应改写配置");
+
+            first.ActivateDeepSeek("deepseek-flash");
             Switcher moved = new Switcher(codex, data, @"C:\Tools\Two\CodexModelSwitcher.exe", false);
             Assert(moved.DetectStaleAuthCommand() != null, "未检测到失效的取密钥路径");
             Assert(moved.RepairAuthCommand(), "未能修复取密钥路径");
