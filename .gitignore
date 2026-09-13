@@ -1,0 +1,22 @@
+# build output
+dist/
+*.exe
+*.dll
+
+# compiler / editor leftovers
+*.cms-tmp
+*.cms-old
+*.user
+*.suo
+.vs/
+.vscode/
+
+# local scratch
+work/
+*.log
+
+# never commit credentials or captured account data
+*.secret
+auth.json
+config.toml
+preview-usage*.png
