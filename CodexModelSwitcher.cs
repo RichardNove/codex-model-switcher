@@ -16,7 +16,7 @@ namespace CodexModelSwitcher
 {
     internal static class Program
     {
-        internal const string Version = "1.7";
+        internal const string Version = "1.8";
 
         [DllImport("shcore.dll")]
         private static extern int SetProcessDpiAwareness(int awareness);
@@ -168,8 +168,8 @@ namespace CodexModelSwitcher
         {
             Text = "Codex 模型启动器";
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(1080, 500);
-            MinimumSize = new Size(900, 460);
+            ClientSize = new Size(1080, 760);
+            MinimumSize = new Size(900, 700);
             FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = true;
             AutoScroll = true;
@@ -183,7 +183,7 @@ namespace CodexModelSwitcher
             switcher = new Switcher();
 
             contentPanel = new Panel();
-            contentPanel.Size = new Size(1080, 500);
+            contentPanel.Size = new Size(1080, 760);
             contentPanel.BackColor = Canvas;
             Controls.Add(contentPanel);
             AutoScrollMinSize = contentPanel.Size;
@@ -224,9 +224,9 @@ namespace CodexModelSwitcher
 
             cardsPanel = new FlowLayoutPanel();
             cardsPanel.Location = new Point(40, 126);
-            cardsPanel.Size = new Size(1000, 232);
+            cardsPanel.Size = new Size(1000, 492);
             cardsPanel.BackColor = Canvas;
-            cardsPanel.WrapContents = false;
+            cardsPanel.WrapContents = true;
             cardsPanel.AutoScroll = true;
             cardsPanel.Padding = new Padding(0);
             cardsPanel.Margin = new Padding(0);
@@ -234,24 +234,24 @@ namespace CodexModelSwitcher
             BuildCards();
 
             hintLabel = NewLabel("", 8.7F, FontStyle.Regular, Muted);
-            hintLabel.Location = new Point(44, 384);
+            hintLabel.Location = new Point(44, 640);
             hintLabel.Size = new Size(900, 30);
             hintLabel.TextAlign = ContentAlignment.MiddleLeft;
             contentPanel.Controls.Add(hintLabel);
 
             statusLabel = NewLabel("就绪 · 请选择一个模型", 9.5F, FontStyle.Bold, Muted);
-            statusLabel.Location = new Point(44, 420);
+            statusLabel.Location = new Point(44, 676);
             statusLabel.Size = new Size(700, 42);
             statusLabel.TextAlign = ContentAlignment.MiddleLeft;
             contentPanel.Controls.Add(statusLabel);
 
             RoundedButton logButton = SmallButton("日志", Color.FromArgb(99, 99, 102), 84);
-            logButton.Location = new Point(766, 421);
+            logButton.Location = new Point(766, 677);
             logButton.Click += delegate { OpenLogFolder(); };
             contentPanel.Controls.Add(logButton);
 
             RoundedButton openButton = SmallButton("打开 Codex  →", Ink, 174);
-            openButton.Location = new Point(866, 421);
+            openButton.Location = new Point(866, 677);
             openButton.Click += delegate { OpenCodex(); };
             contentPanel.Controls.Add(openButton);
 
@@ -268,7 +268,7 @@ namespace CodexModelSwitcher
             try
             {
                 const float designWidth = 1080F;
-                const float designHeight = 500F;
+                const float designHeight = 760F;
                 float targetScale = Math.Min(ClientSize.Width / designWidth, ClientSize.Height / designHeight);
                 targetScale = Math.Max(0.72F, targetScale);
                 if (Math.Abs(targetScale - contentScale) > 0.002F)
@@ -330,13 +330,17 @@ namespace CodexModelSwitcher
                     control.Dispose();
                 }
                 cardsPanel.Controls.Add(CreateCard("G", "GPT / OpenAI", "使用现有 ChatGPT 账号\n恢复原来的 Codex 配置", Blue, delegate { ActivateOpenAI(); }));
-                List<ModelOption> options = switcher.LoadModelOptions();
-                for (int i = 0; i < options.Count; i++)
+                foreach (BuiltInProvider provider in BuiltInProviders.All())
                 {
-                    ModelOption option = options[i];
-                    Color accent = i == 0 ? Teal : Color.FromArgb(103, 78, 190);
-                    string glyph = i == 0 ? "D" : i == 1 ? "D+" : "D" + (i + 1).ToString(CultureInfo.InvariantCulture);
-                    cardsPanel.Controls.Add(CreateCard(glyph, option.DisplayName, option.Description, accent, ActivateHandler(option.Slug)));
+                    List<ModelOption> options = switcher.LoadModelOptions(provider.Id);
+                    for (int i = 0; i < options.Count; i++)
+                    {
+                        ModelOption option = options[i];
+                        string glyph = i == 0 ? provider.Glyph
+                            : i == 1 ? provider.Glyph + "+"
+                            : provider.Glyph + (i + 1).ToString(CultureInfo.InvariantCulture);
+                        cardsPanel.Controls.Add(CreateCard(glyph, option.DisplayName, option.Description, provider.Accent, ActivateHandler(provider.Id, option.Slug)));
+                    }
                 }
             }
             finally
@@ -345,9 +349,9 @@ namespace CodexModelSwitcher
             }
         }
 
-        private EventHandler ActivateHandler(string slug)
+        private EventHandler ActivateHandler(string providerId, string slug)
         {
-            return delegate { ActivateDeepSeek(slug); };
+            return delegate { ActivateModel(providerId, slug); };
         }
 
         /// <summary>
@@ -374,9 +378,9 @@ namespace CodexModelSwitcher
             {
                 try
                 {
-                    string before = string.Join("|", ModelSlugs());
+                    string before = ModelSlugs();
                     switcher.RefreshCatalog();
-                    string after = string.Join("|", ModelSlugs());
+                    string after = ModelSlugs();
                     if (before == after || IsDisposed) return;
                     BeginInvoke((MethodInvoker)delegate
                     {
@@ -391,11 +395,15 @@ namespace CodexModelSwitcher
             });
         }
 
-        private string[] ModelSlugs()
+        private string ModelSlugs()
         {
             List<string> slugs = new List<string>();
-            foreach (ModelOption option in switcher.LoadModelOptions()) slugs.Add(option.Slug);
-            return slugs.ToArray();
+            foreach (BuiltInProvider provider in BuiltInProviders.All())
+            {
+                foreach (ModelOption option in switcher.LoadModelOptions(provider.Id))
+                    slugs.Add(provider.Id + ":" + option.Slug);
+            }
+            return string.Join("|", slugs.ToArray());
         }
 
         private void OpenLogFolder()
@@ -445,26 +453,29 @@ namespace CodexModelSwitcher
             }
         }
 
-        private void ActivateDeepSeek(string model)
+        private void ActivateModel(string providerId, string model)
         {
-            if (!SecretStore.Exists())
+            BuiltInProvider provider = BuiltInProviders.Find(providerId);
+            if (provider == null) return;
+            if (!SecretStore.Exists(provider.Id))
             {
-                MessageBox.Show(this, "还没有配置 DeepSeek API Key。\r\n\r\n现在打开「模型配置」填写吗？", "需要 API Key", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "还没有配置 " + provider.DisplayName + " 的 API Key。\r\n\r\n现在打开「模型配置」填写吗？",
+                    "需要 API Key", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 OpenModelSettings();
                 return;
             }
             Cursor = Cursors.WaitCursor;
-            SetStatus("正在生成并验证 DeepSeek 配置…", Blue);
+            SetStatus("正在生成并验证 " + provider.DisplayName + " 配置…", Blue);
             Application.DoEvents();
             try
             {
-                SwitchResult result = switcher.ActivateDeepSeek(model);
+                SwitchResult result = switcher.ActivateBuiltIn(provider.Id, model);
                 SetStatus(result.Message, Teal);
                 LaunchAfterSwitch();
             }
             catch (Exception ex)
             {
-                ShowError("切换 DeepSeek 失败", ex);
+                ShowError("切换 " + provider.DisplayName + " 失败", ex);
             }
             finally
             {
@@ -541,11 +552,16 @@ namespace CodexModelSwitcher
         /// <summary>One-line summary of the DeepSeek credential; the editor now lives in the settings dialog.</summary>
         private void UpdateKeyHint()
         {
-            bool configured = SecretStore.Exists();
-            hintLabel.Text = configured
-                ? "DeepSeek 密钥：已配置（Windows 当前用户加密保存）· 在「模型配置」中管理"
-                : "DeepSeek 密钥：尚未配置 · 点击右上角「模型配置」填写";
-            hintLabel.ForeColor = configured ? Teal : Color.FromArgb(190, 45, 45);
+            List<string> parts = new List<string>();
+            bool missing = false;
+            foreach (BuiltInProvider provider in BuiltInProviders.All())
+            {
+                bool configured = SecretStore.Exists(provider.Id);
+                if (!configured) missing = true;
+                parts.Add(provider.DisplayName + (configured ? " 已配置" : " 未配置"));
+            }
+            hintLabel.Text = "密钥：" + string.Join(" · ", parts.ToArray()) + "　·　在右上角「模型配置」中管理";
+            hintLabel.ForeColor = missing ? Color.FromArgb(190, 45, 45) : Teal;
         }
 
         private void SetStatus(string text, Color color)
@@ -590,7 +606,7 @@ namespace CodexModelSwitcher
                 contentPanel.Scale(new SizeF(inverse, inverse));
                 contentPanel.ResumeLayout(true);
             }
-            contentPanel.Size = new Size(1080, 500);
+            contentPanel.Size = new Size(1080, 760);
             contentScale = 1F;
         }
     }
@@ -605,8 +621,10 @@ namespace CodexModelSwitcher
         private readonly TextBox keyBox;
         private readonly TextBox usageUrlBox;
         private readonly Label statusLabel;
-        private readonly TextBox deepSeekKeyBox;
-        private readonly Label deepSeekStatusLabel;
+        private TextBox deepSeekKeyBox;
+        private Label deepSeekStatusLabel;
+        private TextBox minimaxKeyBox;
+        private Label minimaxStatusLabel;
         private readonly Panel contentPanel;
         private ProviderProfile current;
         private float contentScale = 1F;
@@ -617,39 +635,29 @@ namespace CodexModelSwitcher
             switcher = modelSwitcher;
             Text = "模型配置";
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(900, 780);
-            MinimumSize = new Size(820, 660);
+            ClientSize = new Size(900, 840);
+            MinimumSize = new Size(820, 700);
             BackColor = Color.FromArgb(245, 245, 247);
             Font = new Font("Microsoft YaHei UI", 9F);
             AutoScaleMode = AutoScaleMode.Dpi;
             AutoScroll = true;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
-            contentPanel = new Panel { Size = new Size(900, 780), BackColor = Color.FromArgb(245, 245, 247) };
+            contentPanel = new Panel { Size = new Size(900, 840), BackColor = Color.FromArgb(245, 245, 247) };
             Controls.Add(contentPanel);
             AutoScrollMinSize = contentPanel.Size;
             Resize += delegate { PositionContent(); };
 
             contentPanel.Controls.Add(LabelAt("模型配置", 28F, FontStyle.Bold, Color.FromArgb(29, 29, 31), 32, 18, 600, 62));
-            contentPanel.Controls.Add(LabelAt("DeepSeek 密钥，以及任何兼容 Responses API 的模型提供商", 9.5F, FontStyle.Regular, Color.FromArgb(110, 110, 115), 35, 82, 700, 30));
+            contentPanel.Controls.Add(LabelAt("DeepSeek 与 MiniMax 的密钥，以及任何兼容 Responses API 的模型提供商", 9.5F, FontStyle.Regular, Color.FromArgb(110, 110, 115), 35, 82, 760, 30));
 
-            RoundedPanel deepseek = PanelAt(30, 118, 840, 150);
+            RoundedPanel deepseek = PanelAt(30, 118, 840, 210);
             contentPanel.Controls.Add(deepseek);
-            deepseek.Controls.Add(LabelAt("DeepSeek API Key", 12F, FontStyle.Bold, Color.FromArgb(29, 29, 31), 24, 12, 300, 32));
-            deepSeekStatusLabel = LabelAt("", 8.6F, FontStyle.Bold, Color.FromArgb(110, 110, 115), 24, 44, 500, 26);
-            deepseek.Controls.Add(deepSeekStatusLabel);
-            deepSeekKeyBox = InputAt(deepseek, 24, 74, 470);
-            deepSeekKeyBox.UseSystemPasswordChar = true;
-            deepSeekKeyBox.Font = new Font("Consolas", 10F);
-            RoundedButton saveKeyButton = ButtonAt("安全保存", Color.FromArgb(0, 113, 227), 510, 69, 130);
-            saveKeyButton.Click += delegate { SaveDeepSeekKey(); };
-            deepseek.Controls.Add(saveKeyButton);
-            RoundedButton testKeyButton = ButtonAt("测试连接", Color.FromArgb(73, 73, 78), 652, 69, 130);
-            testKeyButton.Click += delegate { TestDeepSeekKey(); };
-            deepseek.Controls.Add(testKeyButton);
-            deepseek.Controls.Add(LabelAt("密钥使用 Windows DPAPI 加密保存，不会以明文写入 Codex 配置。", 8.3F, FontStyle.Regular, Color.FromArgb(110, 110, 115), 24, 116, 780, 24));
+            BuildKeyRow(deepseek, BuiltInProviders.DeepSeek, 8, out deepSeekKeyBox, out deepSeekStatusLabel);
+            BuildKeyRow(deepseek, BuiltInProviders.MiniMax, 104, out minimaxKeyBox, out minimaxStatusLabel);
+            deepseek.Controls.Add(LabelAt("密钥使用 Windows DPAPI 加密保存，不会以明文写入 Codex 配置。", 8.3F, FontStyle.Regular, Color.FromArgb(110, 110, 115), 24, 182, 780, 24));
 
-            RoundedPanel left = PanelAt(30, 290, 250, 445);
+            RoundedPanel left = PanelAt(30, 350, 250, 445);
             contentPanel.Controls.Add(left);
             left.Controls.Add(LabelAt("已导入模型", 12F, FontStyle.Bold, Color.FromArgb(29, 29, 31), 20, 18, 190, 34));
             profileList = new ListBox();
@@ -663,7 +671,7 @@ namespace CodexModelSwitcher
             newButton.Click += delegate { ClearEditor(); };
             left.Controls.Add(newButton);
 
-            RoundedPanel editor = PanelAt(300, 290, 570, 445);
+            RoundedPanel editor = PanelAt(300, 350, 570, 445);
             contentPanel.Controls.Add(editor);
             editor.Controls.Add(LabelAt("提供商名称", 8.7F, FontStyle.Bold, Color.FromArgb(110, 110, 115), 24, 15, 180, 26));
             nameBox = InputAt(editor, 24, 42, 245);
@@ -696,10 +704,10 @@ namespace CodexModelSwitcher
             deleteButton.Click += delegate { DeleteProfile(); };
             editor.Controls.Add(deleteButton);
 
-            statusLabel = LabelAt("DeepSeek 密钥与模型都会保存到当前 Windows 用户的加密配置中。", 8.8F, FontStyle.Bold, Color.FromArgb(110, 110, 115), 35, 745, 820, 30);
+            statusLabel = LabelAt("DeepSeek 与 MiniMax 的密钥、以及导入模型，都会保存到当前 Windows 用户的加密配置中。", 8.8F, FontStyle.Bold, Color.FromArgb(110, 110, 115), 35, 805, 830, 30);
             contentPanel.Controls.Add(statusLabel);
             LoadProfiles();
-            UpdateDeepSeekStatus();
+            UpdateKeyStatuses();
             PositionContent();
         }
 
@@ -710,7 +718,7 @@ namespace CodexModelSwitcher
             try
             {
                 const float designWidth = 900F;
-                const float designHeight = 780F;
+                const float designHeight = 840F;
                 float targetScale = Math.Max(0.72F, Math.Min(ClientSize.Width / designWidth, ClientSize.Height / designHeight));
                 if (Math.Abs(targetScale - contentScale) > 0.002F)
                 {
@@ -843,20 +851,39 @@ namespace CodexModelSwitcher
         private void ShowError(Exception ex) { ShowStatus(ex.Message, Color.FromArgb(190, 45, 45)); MessageBox.Show(this, ex.Message, "操作失败", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         private void ShowStatus(string text, Color color) { statusLabel.Text = text; statusLabel.ForeColor = color; }
 
-        private void SaveDeepSeekKey()
+        /// <summary>Builds one "API Key" row (label, status, input, save, test) inside the key panel.</summary>
+        private void BuildKeyRow(RoundedPanel panel, BuiltInProvider provider, int top, out TextBox box, out Label status)
         {
-            string key = deepSeekKeyBox.Text.Trim();
-            if (!key.StartsWith("sk-", StringComparison.Ordinal))
+            panel.Controls.Add(LabelAt(provider.DisplayName + " API Key", 11.5F, FontStyle.Bold, Color.FromArgb(29, 29, 31), 24, top + 6, 230, 26));
+            status = LabelAt("", 8.4F, FontStyle.Bold, Color.FromArgb(110, 110, 115), 262, top + 9, 320, 24);
+            panel.Controls.Add(status);
+            box = InputAt(panel, 24, top + 36, 470);
+            box.UseSystemPasswordChar = true;
+            box.Font = new Font("Consolas", 10F);
+            BuiltInProvider captured = provider;
+            RoundedButton save = ButtonAt("安全保存", Color.FromArgb(0, 113, 227), 510, top + 33, 130);
+            save.Click += delegate { SaveKeyFor(captured); };
+            panel.Controls.Add(save);
+            RoundedButton test = ButtonAt("测试连接", Color.FromArgb(73, 73, 78), 652, top + 33, 130);
+            test.Click += delegate { TestKeyFor(captured); };
+            panel.Controls.Add(test);
+        }
+
+        private void SaveKeyFor(BuiltInProvider provider)
+        {
+            TextBox box = provider.Id == "minimax" ? minimaxKeyBox : deepSeekKeyBox;
+            string key = box.Text.Trim();
+            if (key.Length == 0)
             {
-                ShowStatus("DeepSeek API Key 应以 sk- 开头。", Color.FromArgb(190, 45, 45));
+                ShowStatus("请先填写 " + provider.DisplayName + " 的 API Key。", Color.FromArgb(190, 45, 45));
                 return;
             }
             try
             {
-                SecretStore.Save(key);
-                deepSeekKeyBox.Clear();
-                UpdateDeepSeekStatus();
-                ShowStatus("DeepSeek API Key 已加密保存。", Color.FromArgb(0, 145, 130));
+                SecretStore.Save(provider.Id, key);
+                box.Clear();
+                UpdateKeyStatuses();
+                ShowStatus(provider.DisplayName + " 的 API Key 已加密保存。", Color.FromArgb(0, 145, 130));
             }
             catch (Exception ex)
             {
@@ -864,25 +891,32 @@ namespace CodexModelSwitcher
             }
         }
 
-        private void TestDeepSeekKey()
+        /// <summary>Calls the provider's real Responses endpoint so the result means something.</summary>
+        private void TestKeyFor(BuiltInProvider provider)
         {
-            if (!SecretStore.Exists())
+            if (!SecretStore.Exists(provider.Id))
             {
-                ShowStatus("请先保存 DeepSeek API Key。", Color.FromArgb(190, 45, 45));
+                ShowStatus("请先保存 " + provider.DisplayName + " 的 API Key。", Color.FromArgb(190, 45, 45));
+                return;
+            }
+            List<ModelOption> options = switcher.LoadModelOptions(provider.Id);
+            if (options.Count == 0)
+            {
+                ShowStatus("没有可用于测试的模型。", Color.FromArgb(190, 45, 45));
                 return;
             }
             Cursor = Cursors.WaitCursor;
-            ShowStatus("正在测试 DeepSeek API…", Color.FromArgb(0, 113, 227));
+            ShowStatus("正在真实调用 " + provider.DisplayName + " 的 Responses 接口…", Color.FromArgb(0, 113, 227));
             Application.DoEvents();
             try
             {
-                string balance = DeepSeekApi.GetBalance(SecretStore.Load("deepseek"));
-                ShowStatus("DeepSeek 连接成功 · " + balance, Color.FromArgb(0, 145, 130));
+                string result = ProviderProbe.Test(provider, options[0].Slug, SecretStore.Load(provider.Id));
+                ShowStatus(provider.DisplayName + " · " + result, Color.FromArgb(0, 145, 130));
             }
             catch (Exception ex)
             {
-                ShowStatus("连接测试失败：" + ex.Message, Color.FromArgb(190, 45, 45));
-                Log.Warn("DeepSeek 连接测试失败", ex);
+                ShowStatus(provider.DisplayName + " 测试失败：" + ex.Message, Color.FromArgb(190, 45, 45));
+                Log.Warn(provider.DisplayName + " 连接测试失败", ex);
             }
             finally
             {
@@ -890,11 +924,16 @@ namespace CodexModelSwitcher
             }
         }
 
-        private void UpdateDeepSeekStatus()
+        private void UpdateKeyStatuses()
         {
-            bool configured = SecretStore.Exists();
-            deepSeekStatusLabel.Text = configured ? "已配置密钥（Windows 当前用户加密保存）" : "尚未配置密钥";
-            deepSeekStatusLabel.ForeColor = configured ? Color.FromArgb(0, 145, 130) : Color.FromArgb(190, 45, 45);
+            SetKeyStatus(deepSeekStatusLabel, SecretStore.Exists(BuiltInProviders.DeepSeek.Id));
+            SetKeyStatus(minimaxStatusLabel, SecretStore.Exists(BuiltInProviders.MiniMax.Id));
+        }
+
+        private static void SetKeyStatus(Label label, bool configured)
+        {
+            label.Text = configured ? "已配置密钥 · DPAPI 加密" : "尚未配置密钥";
+            label.ForeColor = configured ? Color.FromArgb(0, 145, 130) : Color.FromArgb(190, 45, 45);
         }
 
         private const int WmDpiChanged = 0x02E0;
@@ -924,7 +963,7 @@ namespace CodexModelSwitcher
                 contentPanel.Scale(new SizeF(inverse, inverse));
                 contentPanel.ResumeLayout(true);
             }
-            contentPanel.Size = new Size(900, 780);
+            contentPanel.Size = new Size(900, 840);
             contentScale = 1F;
         }
     }
@@ -1016,9 +1055,12 @@ namespace CodexModelSwitcher
         {
             list.Items.Clear();
             list.Items.Add(new ListViewItem(new string[] { "GPT / OpenAI", "ChatGPT 账号", "等待刷新（官方 Codex App Server）" }) { Name = "openai" });
-            List<ModelOption> options = switcher.LoadModelOptions();
-            foreach (ModelOption option in options)
-                list.Items.Add(new ListViewItem(new string[] { option.DisplayName, "DeepSeek", SecretStore.Exists() ? "等待刷新" : "尚未配置 API Key" }) { Name = option.Slug });
+            foreach (BuiltInProvider provider in BuiltInProviders.All())
+            {
+                bool configured = SecretStore.Exists(provider.Id);
+                foreach (ModelOption option in switcher.LoadModelOptions(provider.Id))
+                    list.Items.Add(new ListViewItem(new string[] { option.DisplayName, provider.DisplayName, configured ? "等待刷新" : "尚未配置 API Key" }) { Name = option.Slug });
+            }
             foreach (ProviderProfile p in ProviderStore.Load())
                 list.Items.Add(new ListViewItem(new string[] { p.Model, p.Name, p.UsageUrl.Length > 0 ? "等待刷新" : "提供商未配置用量接口" }) { Name = p.Id });
         }
@@ -1045,17 +1087,34 @@ namespace CodexModelSwitcher
                         : "读取失败：" + ex.Message;
                 }
 
-                List<ModelOption> options = switcher.LoadModelOptions();
-                if (SecretStore.Exists())
+                foreach (BuiltInProvider provider in BuiltInProviders.All())
                 {
-                    string balance = null;
-                    string balanceError = null;
-                    try { balance = DeepSeekApi.GetBalance(SecretStore.Load("deepseek")); }
-                    catch (Exception ex) { balanceError = ex.Message; Log.Warn("读取 DeepSeek 余额失败", ex); }
+                    if (!SecretStore.Exists(provider.Id)) continue;
+                    List<ModelOption> options = switcher.LoadModelOptions(provider.Id);
+                    string value = null;
+                    string error = null;
+                    try
+                    {
+                        if (provider.Id == "deepseek")
+                        {
+                            string balance = DeepSeekApi.GetBalance(SecretStore.Load(provider.Id));
+                            value = options.Count > 1 ? balance + "（共享账户）" : balance;
+                        }
+                        else
+                        {
+                            // MiniMax exposes no balance endpoint; the connection itself is checked in 模型配置.
+                            value = "该提供商未提供余额接口（可在「模型配置」中点测试连接）";
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        error = "读取失败：" + ex.Message;
+                        Log.Warn("读取 " + provider.DisplayName + " 用量失败", ex);
+                    }
                     foreach (ModelOption option in options)
                     {
-                        if (balance != null) values[option.Slug] = options.Count > 1 ? balance + "（共享账户）" : balance;
-                        else errors[option.Slug] = "读取失败：" + balanceError;
+                        if (value != null) values[option.Slug] = value;
+                        else errors[option.Slug] = error;
                     }
                 }
                 foreach (ProviderProfile p in ProviderStore.Load())
@@ -1706,6 +1765,102 @@ namespace CodexModelSwitcher
         }
     }
 
+    /// <summary>
+    /// Verifies a provider by actually calling its Responses endpoint, which is the only thing that
+    /// proves Codex will be able to work with it. A /models call is not evidence: almost every
+    /// OpenAI-compatible service has one, and MiniMax's .cn host does not.
+    /// </summary>
+    internal static class ProviderProbe
+    {
+        public static string Test(BuiltInProvider provider, string model, string apiKey)
+        {
+            return Test(provider.BaseUrl, model, apiKey, provider.DisplayName);
+        }
+
+        public static string Test(string baseUrl, string model, string apiKey, string label)
+        {
+            if (string.IsNullOrWhiteSpace(baseUrl)) throw new InvalidOperationException("缺少 Base URL。");
+            if (string.IsNullOrWhiteSpace(model)) throw new InvalidOperationException("缺少模型 ID。");
+
+            string url = baseUrl.TrimEnd('/') + "/responses";
+            string body = "{\"model\":" + Escape(model) + ",\"input\":\"Reply with the single word: pong\",\"stream\":false}";
+
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+            request.Method = "POST";
+            request.ContentType = "application/json";
+            request.Timeout = 40000;
+            request.ReadWriteTimeout = 40000;
+            request.Headers[HttpRequestHeader.Authorization] = "Bearer " + apiKey;
+            request.UserAgent = "CodexModelSwitcher/" + Program.Version;
+
+            byte[] payload = Encoding.UTF8.GetBytes(body);
+            try
+            {
+                request.ContentLength = payload.Length;
+                using (Stream stream = request.GetRequestStream()) stream.Write(payload, 0, payload.Length);
+                using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+                using (StreamReader reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
+                {
+                    return Describe(reader.ReadToEnd(), model);
+                }
+            }
+            catch (WebException ex)
+            {
+                HttpWebResponse response = ex.Response as HttpWebResponse;
+                if (response == null) throw new InvalidOperationException("无法连接 " + label + "：" + ex.Message, ex);
+                string detail = "";
+                try
+                {
+                    using (StreamReader reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
+                        detail = reader.ReadToEnd();
+                }
+                catch
+                {
+                }
+                if (detail.Length > 200) detail = detail.Substring(0, 200);
+                string hint = (int)response.StatusCode == 401 || (int)response.StatusCode == 403
+                    ? "（密钥无效或没有该模型的权限）"
+                    : "";
+                throw new InvalidOperationException(label + " 返回 HTTP " + (int)response.StatusCode + hint + "：" + detail, ex);
+            }
+        }
+
+        private static string Describe(string json, string model)
+        {
+            object root;
+            if (!Json.TryParse(json, out root))
+                throw new InvalidOperationException("接口返回的不是合法 JSON，说明它可能不兼容 Responses 协议。");
+            string text = Json.Text(Json.Member(root, "output_text"));
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                List<object> output = Json.Array(Json.Member(root, "output"));
+                if (output != null)
+                {
+                    foreach (object item in output)
+                    {
+                        List<object> content = Json.Array(Json.Member(item, "content"));
+                        if (content == null) continue;
+                        foreach (object part in content)
+                        {
+                            string candidate = Json.Text(Json.Member(part, "text"));
+                            if (!string.IsNullOrWhiteSpace(candidate)) { text = candidate; break; }
+                        }
+                        if (!string.IsNullOrWhiteSpace(text)) break;
+                    }
+                }
+            }
+            if (string.IsNullOrWhiteSpace(text)) throw new InvalidOperationException("接口没有返回 output_text，可能不支持 Responses 协议。");
+            if (text.Length > 60) text = text.Substring(0, 57) + "…";
+            return "连接成功 · " + model + " 回复：" + text.Replace("\n", " ");
+        }
+
+        private static string Escape(string value)
+        {
+            return "\"" + (value ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+        }
+    }
+
     internal sealed class SwitchResult
     {
         public string Message;
@@ -1757,13 +1912,26 @@ namespace CodexModelSwitcher
 
         private string ConfigPath { get { return Path.Combine(codexHome, "config.toml"); } }
         private string StatePath { get { return Path.Combine(appData, "switch-state.bin"); } }
-        private string CatalogPath { get { return Path.Combine(appData, "deepseek-models.json"); } }
+        private string CatalogPathFor(string providerId) { return Path.Combine(appData, providerId + "-models.json"); }
         private string BackupDirectory { get { return Path.Combine(appData, "backups"); } }
 
         public SwitchResult ActivateDeepSeek(string model)
         {
-            if (!IsKnownDeepSeekModel(model))
-                throw new ArgumentException("不支持的 DeepSeek 模型。", "model");
+            return ActivateBuiltIn("deepseek", model);
+        }
+
+        /// <summary>
+        /// Writes the managed block plus the provider section for any built-in provider
+        /// (DeepSeek, MiniMax, ...). The API key is never written here — Codex fetches it by
+        /// running this executable with --print-secret.
+        /// </summary>
+        public SwitchResult ActivateBuiltIn(string providerId, string model)
+        {
+            BuiltInProvider provider = BuiltInProviders.Find(providerId);
+            if (provider == null)
+                throw new ArgumentException("未知的提供商。", "providerId");
+            if (!IsKnownModel(provider, model))
+                throw new ArgumentException("不支持的模型。", "model");
 
             Directory.CreateDirectory(codexHome);
             Directory.CreateDirectory(appData);
@@ -1773,46 +1941,45 @@ namespace CodexModelSwitcher
 
             if (!File.Exists(StatePath))
             {
-                SwitchState state = CaptureState(current, File.Exists(ConfigPath));
+                SwitchState state = CaptureState(current, existed);
                 SaveState(state);
             }
 
-            EnsureCatalog();
+            EnsureCatalog(provider);
             string clean = RemoveManagedBlock(current);
             clean = RemoveProviderSections(clean, null);
             clean = RemoveTopLevelAssignments(clean, null);
 
-            string catalog = TomlString(CatalogPath.Replace('\\', '/'));
             StringBuilder managed = new StringBuilder();
             managed.AppendLine(BeginMarker);
             managed.AppendLine("model = " + TomlString(model));
-            managed.AppendLine("model_provider = \"deepseek\"");
+            managed.AppendLine("model_provider = " + TomlString(provider.Id));
             managed.AppendLine("preferred_auth_method = \"apikey\"");
             managed.AppendLine("forced_login_method = \"api\"");
             managed.AppendLine("model_reasoning_effort = \"high\"");
             managed.AppendLine("web_search = \"disabled\"");
-            managed.AppendLine("model_catalog_json = " + catalog);
+            managed.AppendLine("model_catalog_json = " + TomlString(CatalogPathFor(provider.Id).Replace('\\', '/')));
             managed.AppendLine(EndMarker);
             managed.AppendLine();
 
-            StringBuilder provider = new StringBuilder();
-            provider.AppendLine();
-            provider.AppendLine("[model_providers.deepseek]");
-            provider.AppendLine("name = \"DeepSeek\"");
-            provider.AppendLine("base_url = \"https://api.deepseek.com/\"");
-            provider.AppendLine("wire_api = \"responses\"");
-            provider.AppendLine();
-            provider.AppendLine("[model_providers.deepseek.auth]");
-            provider.AppendLine("command = " + TomlString(executablePath.Replace('\\', '/')));
-            provider.AppendLine("args = [\"--print-secret\", \"deepseek\"]");
-            provider.AppendLine("timeout_ms = 5000");
-            provider.AppendLine("refresh_interval_ms = 0");
+            StringBuilder section = new StringBuilder();
+            section.AppendLine();
+            section.AppendLine("[model_providers." + provider.Id + "]");
+            section.AppendLine("name = " + TomlString(provider.DisplayName));
+            section.AppendLine("base_url = " + TomlString(provider.BaseUrl));
+            section.AppendLine("wire_api = \"responses\"");
+            section.AppendLine();
+            section.AppendLine("[model_providers." + provider.Id + ".auth]");
+            section.AppendLine("command = " + TomlString(executablePath.Replace('\\', '/')));
+            section.AppendLine("args = [\"--print-secret\", " + TomlString(provider.Id) + "]");
+            section.AppendLine("timeout_ms = 5000");
+            section.AppendLine("refresh_interval_ms = 0");
 
-            string result = managed.ToString() + clean.TrimStart('\r', '\n') + provider.ToString();
+            string result = managed.ToString() + clean.TrimStart('\r', '\n') + section.ToString();
             EnsureUnchanged(ConfigPath, current, existed);
             WriteAtomic(ConfigPath, Normalize(result).TrimEnd() + Environment.NewLine);
-            Log.Info("已切换到 " + model + "（备份：" + backup + "）");
-            return new SwitchResult { Message = "已切换到 " + DisplayName(model) + "。", BackupPath = backup };
+            Log.Info("已切换到 " + provider.DisplayName + " / " + model + "（备份：" + backup + "）");
+            return new SwitchResult { Message = "已切换到 " + TitleOf(provider.Id, model) + "。", BackupPath = backup };
         }
 
         public SwitchResult ActivateCustom(ProviderProfile profile)
@@ -1957,10 +2124,10 @@ namespace CodexModelSwitcher
                 throw new InvalidOperationException("Codex 配置在操作期间被其他程序改动，已中止以免覆盖你的设置。请重新点一次卡片。");
         }
 
-        private void EnsureCatalog()
+        private void EnsureCatalog(BuiltInProvider provider)
         {
             string json = null;
-            if (allowNetwork)
+            if (allowNetwork && provider.Id == "deepseek")
             {
                 try
                 {
@@ -1988,10 +2155,10 @@ namespace CodexModelSwitcher
                 }
             }
 
-            if (string.IsNullOrWhiteSpace(json) || !json.Contains("\"deepseek-flash\"") || !json.Contains("\"deepseek-v4-pro\""))
+            string fallback = FallbackCatalogFor(provider.Id);
+            if (string.IsNullOrWhiteSpace(json))
             {
-                if (!string.IsNullOrWhiteSpace(json)) Log.Warn("DeepSeek 官方模型目录内容与预期不符，改用内置目录。");
-                json = FallbackCatalog;
+                json = fallback;
             }
             else
             {
@@ -2008,39 +2175,50 @@ namespace CodexModelSwitcher
                 }
                 if (!usable)
                 {
-                    Log.Warn("DeepSeek 官方模型目录结构无法识别，改用内置目录。");
-                    json = FallbackCatalog;
+                    Log.Warn(provider.DisplayName + " 的模型目录结构无法识别，改用内置目录。");
+                    json = fallback;
                 }
             }
-            WriteAtomic(CatalogPath, json.Trim() + Environment.NewLine);
+            WriteAtomic(CatalogPathFor(provider.Id), json.Trim() + Environment.NewLine);
         }
 
-        /// <summary>Refreshes the DeepSeek model catalog; safe to call from a background thread.</summary>
+        private static string FallbackCatalogFor(string providerId)
+        {
+            return providerId == "minimax" ? MiniMaxFallbackCatalog : FallbackCatalog;
+        }
+
+        /// <summary>Refreshes every provider catalog; safe to call from a background thread.</summary>
         public void RefreshCatalog()
         {
-            try
+            foreach (BuiltInProvider provider in BuiltInProviders.All())
             {
-                EnsureCatalog();
-            }
-            catch (Exception ex)
-            {
-                Log.Warn("刷新 DeepSeek 模型目录失败", ex);
+                try
+                {
+                    EnsureCatalog(provider);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn("刷新 " + provider.DisplayName + " 模型目录失败", ex);
+                }
             }
         }
 
         /// <summary>
-        /// DeepSeek models to show as cards. Driven by the catalog the switcher writes, so new
-        /// official models appear without a new build; falls back to the built-in pair.
+        /// Models of one provider, driven by the catalog the switcher writes, so new official
+        /// models appear without a new build; falls back to the built-in list.
         /// </summary>
-        public List<ModelOption> LoadModelOptions()
+        public List<ModelOption> LoadModelOptions(string providerId)
         {
+            BuiltInProvider provider = BuiltInProviders.Find(providerId);
+            if (provider == null) return new List<ModelOption>();
             List<ModelOption> options = new List<ModelOption>();
+            string catalogPath = CatalogPathFor(provider.Id);
             try
             {
-                if (File.Exists(CatalogPath))
+                if (File.Exists(catalogPath))
                 {
                     object root;
-                    if (Json.TryParse(File.ReadAllText(CatalogPath, Encoding.UTF8), out root))
+                    if (Json.TryParse(File.ReadAllText(catalogPath, Encoding.UTF8), out root))
                     {
                         List<object> models = Json.Array(Json.Member(root, "models"));
                         if (models != null)
@@ -2053,8 +2231,8 @@ namespace CodexModelSwitcher
                                 options.Add(new ModelOption
                                 {
                                     Slug = slug,
-                                    DisplayName = ReadableName(slug, display),
-                                    Description = DescribeModel(slug)
+                                    DisplayName = BuiltInProviders.TitleFor(slug, display),
+                                    Description = BuiltInProviders.Describe(slug)
                                 });
                                 if (options.Count >= 6) break;
                             }
@@ -2064,24 +2242,42 @@ namespace CodexModelSwitcher
             }
             catch (Exception ex)
             {
-                Log.Warn("读取 DeepSeek 模型目录失败，使用内置列表", ex);
+                Log.Warn("读取 " + provider.DisplayName + " 模型目录失败，使用内置列表", ex);
             }
             if (options.Count == 0)
             {
-                options.Add(new ModelOption { Slug = "deepseek-flash", DisplayName = "DeepSeek Flash", Description = DescribeModel("deepseek-flash") });
-                options.Add(new ModelOption { Slug = "deepseek-v4-pro", DisplayName = "DeepSeek V4 Pro", Description = DescribeModel("deepseek-v4-pro") });
+                foreach (string slug in provider.DefaultModels)
+                {
+                    options.Add(new ModelOption
+                    {
+                        Slug = slug,
+                        DisplayName = BuiltInProviders.TitleFor(slug, null),
+                        Description = BuiltInProviders.Describe(slug)
+                    });
+                }
             }
             return options;
         }
 
-        public bool IsKnownDeepSeekModel(string slug)
+        public List<ModelOption> LoadModelOptions()
+        {
+            return LoadModelOptions("deepseek");
+        }
+
+        public bool IsKnownModel(BuiltInProvider provider, string slug)
         {
             if (string.IsNullOrWhiteSpace(slug)) return false;
-            foreach (ModelOption option in LoadModelOptions())
+            foreach (ModelOption option in LoadModelOptions(provider.Id))
             {
                 if (string.Equals(option.Slug, slug, StringComparison.Ordinal)) return true;
             }
             return false;
+        }
+
+        public bool IsKnownDeepSeekModel(string slug)
+        {
+            BuiltInProvider provider = BuiltInProviders.Find("deepseek");
+            return provider != null && IsKnownModel(provider, slug);
         }
 
         /// <summary>True when config.toml is currently forced into API-key auth (third-party mode).</summary>
@@ -2100,20 +2296,13 @@ namespace CodexModelSwitcher
             }
         }
 
-        internal static string DescribeModel(string slug)
+        private string TitleOf(string providerId, string model)
         {
-            if (slug == "deepseek-flash") return "支持图片输入，速度更快\n适合日常编码任务";
-            if (slug == "deepseek-v4-pro") return "增强推理能力，回答更深入\n适合复杂和长周期任务";
-            return "DeepSeek 官方模型目录中的模型\n点击切换并启动 Codex";
-        }
-
-        /// <summary>The catalog uses hyphenated names ("DeepSeek-V4-Pro"); show something readable.</summary>
-        internal static string ReadableName(string slug, string displayName)
-        {
-            if (slug == "deepseek-flash") return "DeepSeek Flash";
-            if (slug == "deepseek-v4-pro") return "DeepSeek V4 Pro";
-            if (string.IsNullOrWhiteSpace(displayName)) return (slug ?? "").Replace('-', ' ');
-            return displayName.Replace('-', ' ').Trim();
+            foreach (ModelOption option in LoadModelOptions(providerId))
+            {
+                if (option.Slug == model) return option.DisplayName;
+            }
+            return model;
         }
 
         /// <summary>
@@ -2253,6 +2442,8 @@ namespace CodexModelSwitcher
                     string header = trimmed.Trim('[', ']', ' ', '\t', '\r');
                     bool managedSection = header.Equals("model_providers.deepseek", StringComparison.OrdinalIgnoreCase)
                         || header.StartsWith("model_providers.deepseek.", StringComparison.OrdinalIgnoreCase)
+                        || header.Equals("model_providers.minimax", StringComparison.OrdinalIgnoreCase)
+                        || header.StartsWith("model_providers.minimax.", StringComparison.OrdinalIgnoreCase)
                         || header.StartsWith("model_providers.cms_", StringComparison.OrdinalIgnoreCase);
                     skip = managedSection;
                 }
@@ -2340,15 +2531,6 @@ namespace CodexModelSwitcher
             throw new InvalidOperationException("写入配置失败：" + (last == null ? "未知原因" : last.Message), last);
         }
 
-        private string DisplayName(string model)
-        {
-            foreach (ModelOption option in LoadModelOptions())
-            {
-                if (option.Slug == model) return option.DisplayName;
-            }
-            return model;
-        }
-
         private static string Normalize(string text)
         {
             return (text ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
@@ -2413,6 +2595,56 @@ namespace CodexModelSwitcher
         {""effort"": ""high"", ""description"": ""Extra high reasoning depth for complex problems""},
         {""effort"": ""max"", ""description"": ""Maximum reasoning depth for the hardest problems""}
       ],
+      ""shell_type"": ""shell_command"",
+      ""visibility"": ""list"",
+      ""minimal_client_version"": ""0.144.0"",
+      ""supported_in_api"": true,
+      ""priority"": 2
+    }
+  ]
+}";
+
+        /// <summary>
+        /// MiniMax model catalog. Unlike DeepSeek there is no official setup script to scrape, so
+        /// this list is maintained here; the Responses endpoint was verified to support streaming
+        /// and function calling.
+        /// </summary>
+        private const string MiniMaxFallbackCatalog = @"{
+  ""models"": [
+    {
+      ""slug"": ""MiniMax-M3"",
+      ""display_name"": ""MiniMax-M3"",
+      ""description"": ""MiniMax frontier model with tool calling and long context."",
+      ""prefer_websockets"": false,
+      ""support_verbosity"": false,
+      ""apply_patch_tool_type"": ""freeform"",
+      ""web_search_tool_type"": ""text"",
+      ""input_modalities"": [""text""],
+      ""supports_parallel_tool_calls"": true,
+      ""context_window"": 1000000,
+      ""max_context_window"": 1000000,
+      ""effective_context_window_percent"": 90,
+      ""default_reasoning_level"": ""high"",
+      ""shell_type"": ""shell_command"",
+      ""visibility"": ""list"",
+      ""minimal_client_version"": ""0.144.0"",
+      ""supported_in_api"": true,
+      ""priority"": 1
+    },
+    {
+      ""slug"": ""MiniMax-M2"",
+      ""display_name"": ""MiniMax-M2"",
+      ""description"": ""MiniMax reasoning model for everyday agentic tasks."",
+      ""prefer_websockets"": false,
+      ""support_verbosity"": false,
+      ""apply_patch_tool_type"": ""freeform"",
+      ""web_search_tool_type"": ""text"",
+      ""input_modalities"": [""text""],
+      ""supports_parallel_tool_calls"": true,
+      ""context_window"": 204800,
+      ""max_context_window"": 204800,
+      ""effective_context_window_percent"": 90,
+      ""default_reasoning_level"": ""high"",
       ""shell_type"": ""shell_command"",
       ""visibility"": ""list"",
       ""minimal_client_version"": ""0.144.0"",
@@ -2919,6 +3151,78 @@ namespace CodexModelSwitcher
         public string Description;
     }
 
+    /// <summary>A provider the launcher knows how to configure out of the box.</summary>
+    internal sealed class BuiltInProvider
+    {
+        public string Id;
+        public string DisplayName;
+        public string BaseUrl;
+        public string Glyph;
+        public Color Accent;
+        public string[] DefaultModels;
+    }
+
+    internal static class BuiltInProviders
+    {
+        public static readonly BuiltInProvider DeepSeek = new BuiltInProvider
+        {
+            Id = "deepseek",
+            DisplayName = "DeepSeek",
+            BaseUrl = "https://api.deepseek.com/",
+            Glyph = "D",
+            Accent = Color.FromArgb(0, 145, 130),
+            DefaultModels = new string[] { "deepseek-flash", "deepseek-v4-pro" }
+        };
+
+        public static readonly BuiltInProvider MiniMax = new BuiltInProvider
+        {
+            Id = "minimax",
+            DisplayName = "MiniMax",
+            BaseUrl = "https://api.minimax.cn/v1",
+            Glyph = "M",
+            Accent = Color.FromArgb(224, 84, 44),
+            DefaultModels = new string[] { "MiniMax-M3", "MiniMax-M2" }
+        };
+
+        public static List<BuiltInProvider> All()
+        {
+            List<BuiltInProvider> providers = new List<BuiltInProvider>();
+            providers.Add(DeepSeek);
+            providers.Add(MiniMax);
+            return providers;
+        }
+
+        public static BuiltInProvider Find(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return null;
+            foreach (BuiltInProvider provider in All())
+            {
+                if (string.Equals(provider.Id, id, StringComparison.OrdinalIgnoreCase)) return provider;
+            }
+            return null;
+        }
+
+        /// <summary>Human readable card title; keeps hand-written names instead of raw slugs.</summary>
+        public static string TitleFor(string slug, string catalogName)
+        {
+            if (slug == "deepseek-flash") return "DeepSeek Flash";
+            if (slug == "deepseek-v4-pro") return "DeepSeek V4 Pro";
+            if (slug == "MiniMax-M3") return "MiniMax M3";
+            if (slug == "MiniMax-M2") return "MiniMax M2";
+            if (string.IsNullOrWhiteSpace(catalogName)) return (slug ?? "").Replace('-', ' ');
+            return catalogName.Replace('-', ' ').Trim();
+        }
+
+        public static string Describe(string slug)
+        {
+            if (slug == "deepseek-flash") return "支持图片输入，速度更快\n适合日常编码任务";
+            if (slug == "deepseek-v4-pro") return "增强推理能力，回答更深入\n适合复杂和长周期任务";
+            if (slug == "MiniMax-M3") return "MiniMax 新一代模型\n长上下文，工具调用稳定";
+            if (slug == "MiniMax-M2") return "MiniMax 推理模型\n适合中等复杂度任务";
+            return "来自提供商官方模型目录\n点击切换并启动 Codex";
+        }
+    }
+
     internal static class SelfTest
     {
         public static void Run()
@@ -2965,6 +3269,7 @@ namespace CodexModelSwitcher
                 Assert(parsedLimits.Secondary != null && parsedLimits.Secondary.UsedPercent == 11 && parsedLimits.Secondary.DurationMinutes == 10080, "Secondary ChatGPT limit was not parsed");
 
                 RunV16Checks(codex, data);
+                RunThreeWayChecks(codex, data);
             }
             finally
             {
@@ -2975,6 +3280,42 @@ namespace CodexModelSwitcher
         private static void Assert(bool value, string message)
         {
             if (!value) throw new InvalidOperationException(message);
+        }
+
+        /// <summary>MiniMax joined DeepSeek as a built-in provider; both must behave identically.</summary>
+        private static void RunThreeWayChecks(string codex, string data)
+        {
+            string configPath = Path.Combine(codex, "config.toml");
+            Switcher switcher = new Switcher(codex, data, @"C:\Tools\CodexModelSwitcher.exe", false);
+
+            List<ModelOption> minimax = switcher.LoadModelOptions("minimax");
+            Assert(minimax.Count >= 2, "MiniMax 内置模型列表不完整");
+            Assert(minimax[0].Slug == "MiniMax-M3", "MiniMax 默认模型不是 M3");
+            Assert(minimax[0].DisplayName == "MiniMax M3", "MiniMax 显示名不正确：" + minimax[0].DisplayName);
+            Assert(switcher.IsKnownModel(BuiltInProviders.MiniMax, "MiniMax-M3"), "MiniMax 模型未被识别");
+            Assert(!switcher.IsKnownModel(BuiltInProviders.MiniMax, "no-such-model"), "未知的 MiniMax 模型不应被识别");
+
+            switcher.ActivateBuiltIn("minimax", "MiniMax-M3");
+            string config = File.ReadAllText(configPath);
+            Assert(config.Contains("model = \"MiniMax-M3\""), "未写入 MiniMax 模型");
+            Assert(config.Contains("model_provider = \"minimax\""), "未写入 MiniMax 提供商");
+            Assert(config.Contains("[model_providers.minimax]"), "缺少 MiniMax 提供商段");
+            Assert(config.Contains("base_url = \"https://api.minimax.cn/v1\""), "MiniMax Base URL 不正确");
+            Assert(config.Contains("args = [\"--print-secret\", \"minimax\"]"), "MiniMax 取密钥命令不正确");
+            Assert(!config.Contains("env_key"), "不应使用 env_key 存放密钥");
+            Assert(!Regex.IsMatch(config, "sk-[A-Za-z0-9_\\-]{20,}"), "配置里出现了明文密钥");
+            Assert(File.Exists(Path.Combine(data, "minimax-models.json")), "未生成 MiniMax 模型目录");
+
+            // 三方来回切换：DeepSeek -> MiniMax -> GPT，最后应清空所有受管理的提供商段
+            switcher.ActivateBuiltIn("deepseek", "deepseek-flash");
+            string both = File.ReadAllText(configPath);
+            Assert(both.Contains("[model_providers.deepseek]") && !both.Contains("[model_providers.minimax]"),
+                "切到 DeepSeek 后不应残留 MiniMax 段");
+            switcher.RestoreOpenAI();
+            string restored = File.ReadAllText(configPath);
+            Assert(!restored.Contains("model_providers.minimax"), "恢复 GPT 后 MiniMax 段未被清除");
+            Assert(!restored.Contains("model_providers.deepseek"), "恢复 GPT 后 DeepSeek 段未被清除");
+            Assert(!restored.Contains("forced_login_method"), "恢复 GPT 后仍强制 API Key 登录");
         }
 
         /// <summary>Covers the 1.6 additions: JSON reader, concurrent-edit guard, path repair, backup retention.</summary>

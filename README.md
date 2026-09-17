@@ -4,7 +4,16 @@ A small Windows GUI launcher that switches the Codex desktop app between your Ch
 
 Codex 桌面端可以在界面里切换模型，但要在「ChatGPT 账号登录」和「第三方 API Key」之间来回切换，只能手改 `%USERPROFILE%\.codex\config.toml`。这个小工具把这件事变成点一下卡片：写入安全配置、备份原配置、然后打开 Codex。
 
-当前版本：1.7
+当前版本：1.8
+
+1.8 版：**三方切换**
+
+- 新增 **MiniMax** 支持（`MiniMax-M3`、`MiniMax-M2`），与 GPT、DeepSeek 并列，主界面各一张卡片。
+- 「模型配置」窗口现在同时管理 **DeepSeek 与 MiniMax 的 API Key**，两者都用 DPAPI 加密，都不会写进 `config.toml`。
+- **「测试连接」改为真实调用**：向提供商的 `/responses` 接口发一个最小请求并检查是否返回 `output_text`。以前只请求 `/models`，几乎必然通过，证明不了任何事（MiniMax 的 `.cn` 域名甚至没有 `/models`）。
+- 新增提供商只需在 `BuiltInProviders` 里加一条记录，卡片、密钥区、用量行会自动出现。
+
+MiniMax 的实测结论（2026-09）：`https://api.minimax.cn/v1/responses` 可用，返回标准 Responses 结构；流式事件名（`response.created`、`response.output_item.added`、`response.output_text.delta` …）与 Codex 期待的一致；函数调用能正确返回 `function_call` 与参数。因此可以直接接入，不需要协议转换层。
 
 1.7 版：
 
