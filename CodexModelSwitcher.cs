@@ -16,7 +16,7 @@ namespace CodexModelSwitcher
 {
     internal static class Program
     {
-        internal const string Version = "1.8";
+        internal const string Version = "1.9";
 
         [DllImport("shcore.dll")]
         private static extern int SetProcessDpiAwareness(int awareness);
@@ -66,6 +66,21 @@ namespace CodexModelSwitcher
                 {
                     Console.Error.WriteLine(ex.ToString());
                     return 1;
+                }
+            }
+
+            // Scriptable switching: --activate <providerId> <model>
+            if (args.Length == 3 && args[0] == "--activate")
+            {
+                try
+                {
+                    Console.Out.WriteLine(new Switcher().ActivateBuiltIn(args[1], args[2]).Message);
+                    return 0;
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine(ex.Message);
+                    return 4;
                 }
             }
 
@@ -1945,7 +1960,7 @@ namespace CodexModelSwitcher
                 SaveState(state);
             }
 
-            EnsureCatalog(provider);
+            bool hasCatalog = EnsureCatalog(provider);
             string clean = RemoveManagedBlock(current);
             clean = RemoveProviderSections(clean, null);
             clean = RemoveTopLevelAssignments(clean, null);
@@ -1954,11 +1969,15 @@ namespace CodexModelSwitcher
             managed.AppendLine(BeginMarker);
             managed.AppendLine("model = " + TomlString(model));
             managed.AppendLine("model_provider = " + TomlString(provider.Id));
-            managed.AppendLine("preferred_auth_method = \"apikey\"");
-            managed.AppendLine("forced_login_method = \"api\"");
+            // Deliberately no preferred_auth_method / forced_login_method here.
+            // Those keys force API-key login, and Codex answers a ChatGPT session with
+            // "API key login is required, but ChatGPT is currently being used. Logging out." —
+            // which is what pushed the desktop app back to its setup screen. The custom provider
+            // routes on model_provider alone, so the ChatGPT login can stay intact.
             managed.AppendLine("model_reasoning_effort = \"high\"");
             managed.AppendLine("web_search = \"disabled\"");
-            managed.AppendLine("model_catalog_json = " + TomlString(CatalogPathFor(provider.Id).Replace('\\', '/')));
+            if (hasCatalog)
+                managed.AppendLine("model_catalog_json = " + TomlString(CatalogPathFor(provider.Id).Replace('\\', '/')));
             managed.AppendLine(EndMarker);
             managed.AppendLine();
 
@@ -2003,7 +2022,8 @@ namespace CodexModelSwitcher
             managed.AppendLine("preferred_auth_method = \"apikey\"");
             managed.AppendLine("forced_login_method = \"api\"");
             managed.AppendLine("web_search = \"disabled\"");
-            managed.AppendLine("model_catalog_json = " + TomlString(catalogPath.Replace('\\', '/')));
+            if (!string.IsNullOrWhiteSpace(catalogPath))
+                managed.AppendLine("model_catalog_json = " + TomlString(catalogPath.Replace('\\', '/')));
             managed.AppendLine(EndMarker);
             managed.AppendLine();
 
@@ -2124,67 +2144,172 @@ namespace CodexModelSwitcher
                 throw new InvalidOperationException("Codex 配置在操作期间被其他程序改动，已中止以免覆盖你的设置。请重新点一次卡片。");
         }
 
-        private void EnsureCatalog(BuiltInProvider provider)
+        private const string DeepSeekCatalogUrl = "https://cdn.deepseek.com/api-docs/codex-deepseek-setup-en.ps1";
+
+        /// <summary>
+        /// Writes the model catalog for a provider.
+        ///
+        /// Codex does not accept hand written model entries: a catalogue entry missing fields such as
+        /// truncation_policy, experimental_supported_tools or the instruction template makes Codex
+        /// refuse to load the model, and the desktop app then falls back to its setup screen. So this
+        /// always clones a complete entry from a known good catalogue (DeepSeek's official one) and
+        /// only overrides the model specific values.
+        ///
+        /// Returns false when no complete template is available; the caller then leaves
+        /// model_catalog_json out of config.toml so Codex uses its fallback metadata instead of a
+        /// broken catalogue.
+        /// </summary>
+        private bool EnsureCatalog(BuiltInProvider provider)
         {
-            string json = null;
-            if (allowNetwork && provider.Id == "deepseek")
+            return EnsureCatalog(provider.Id, provider.DefaultModels);
+        }
+
+        private bool EnsureCatalog(string providerId, string[] modelSlugs)
+        {
+            string path = CatalogPathFor(providerId);
+            string donor = LoadDonorCatalog();
+            string catalog = donor == null ? null : BuildCatalog(donor, modelSlugs);
+            if (string.IsNullOrWhiteSpace(catalog))
+            {
+                Log.Warn("没有完整的模型模板，本次不为 " + providerId + " 写模型目录（Codex 将使用回退元数据）。");
+                try { if (File.Exists(path)) File.Delete(path); } catch { }
+                return false;
+            }
+            WriteAtomic(path, catalog + Environment.NewLine);
+            return true;
+        }
+
+        /// <summary>A complete model entry to clone — DeepSeek's official catalogue is the donor.</summary>
+        private string LoadDonorCatalog()
+        {
+            string cached = CatalogPathFor("deepseek");
+            try
+            {
+                if (File.Exists(cached))
+                {
+                    string text = File.ReadAllText(cached, Encoding.UTF8);
+                    if (HasInstructionTemplate(text)) return text;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn("读取 DeepSeek 模型目录失败", ex);
+            }
+            if (allowNetwork)
             {
                 try
                 {
                     ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
                     using (WebClient client = new WebClient())
                     {
-                        client.Headers[HttpRequestHeader.UserAgent] = "CodexModelSwitcher/1.0";
-                        string script = client.DownloadString("https://cdn.deepseek.com/api-docs/codex-deepseek-setup-en.ps1");
-                        string startToken = "$ModelsJson = @'";
-                        int start = script.IndexOf(startToken, StringComparison.Ordinal);
-                        if (start >= 0)
-                        {
-                            start += startToken.Length;
-                            if (start < script.Length && script[start] == '\r') start++;
-                            if (start < script.Length && script[start] == '\n') start++;
-                            int end = script.IndexOf("\n'@", start, StringComparison.Ordinal);
-                            if (end > start)
-                                json = script.Substring(start, end - start).Trim();
-                        }
+                        client.Headers[HttpRequestHeader.UserAgent] = "CodexModelSwitcher/" + Program.Version;
+                        string script = client.DownloadString(DeepSeekCatalogUrl);
+                        string extracted = ExtractModelsJson(script);
+                        if (HasInstructionTemplate(extracted)) return extracted;
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    json = null;
+                    Log.Warn("下载 DeepSeek 模型目录失败", ex);
                 }
             }
-
-            string fallback = FallbackCatalogFor(provider.Id);
-            if (string.IsNullOrWhiteSpace(json))
-            {
-                json = fallback;
-            }
-            else
-            {
-                object parsed;
-                List<object> models = Json.TryParse(json, out parsed) ? Json.Array(Json.Member(parsed, "models")) : null;
-                bool usable = models != null;
-                if (usable)
-                {
-                    usable = false;
-                    foreach (object item in models)
-                    {
-                        if (!string.IsNullOrWhiteSpace(Json.Text(Json.Member(item, "slug")))) { usable = true; break; }
-                    }
-                }
-                if (!usable)
-                {
-                    Log.Warn(provider.DisplayName + " 的模型目录结构无法识别，改用内置目录。");
-                    json = fallback;
-                }
-            }
-            WriteAtomic(CatalogPathFor(provider.Id), json.Trim() + Environment.NewLine);
+            return HasInstructionTemplate(FallbackCatalog) ? FallbackCatalog : null;
         }
 
-        private static string FallbackCatalogFor(string providerId)
+        private static string ExtractModelsJson(string script)
         {
-            return providerId == "minimax" ? MiniMaxFallbackCatalog : FallbackCatalog;
+            if (string.IsNullOrWhiteSpace(script)) return null;
+            const string startToken = "$ModelsJson = @'";
+            int start = script.IndexOf(startToken, StringComparison.Ordinal);
+            if (start < 0) return null;
+            start += startToken.Length;
+            if (start < script.Length && script[start] == '\r') start++;
+            if (start < script.Length && script[start] == '\n') start++;
+            int end = script.IndexOf("\n'@", start, StringComparison.Ordinal);
+            return end > start ? script.Substring(start, end - start).Trim() : null;
+        }
+
+        /// <summary>A catalogue entry is only usable as a template when it carries the instructions.</summary>
+        private static bool HasInstructionTemplate(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return false;
+            object root;
+            if (!Json.TryParse(json, out root)) return false;
+            List<object> models = Json.Array(Json.Member(root, "models"));
+            if (models == null || models.Count == 0) return false;
+            foreach (object item in models)
+            {
+                if (!string.IsNullOrWhiteSpace(Json.Text(Json.Member(item, "base_instructions")))) return true;
+                object messages = Json.Member(item, "model_messages");
+                if (messages != null && !string.IsNullOrWhiteSpace(Json.Text(Json.Member(messages, "instructions_template")))) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Produces the catalogue: entries that already exist in the donor are kept verbatim, other
+        /// models are cloned from the donor's first complete entry with their own values.
+        /// </summary>
+        private static string BuildCatalog(string donorJson, string[] modelSlugs)
+        {
+            object root;
+            if (!Json.TryParse(donorJson, out root)) return null;
+            List<object> donorModels = Json.Array(Json.Member(root, "models"));
+            if (donorModels == null || donorModels.Count == 0) return null;
+
+            Dictionary<string, object> template = null;
+            foreach (object item in donorModels)
+            {
+                Dictionary<string, object> candidate = Json.Object(item);
+                if (candidate == null) continue;
+                string instructions = Json.Text(Json.Member(candidate, "base_instructions"));
+                object messages = Json.Member(candidate, "model_messages");
+                if (string.IsNullOrWhiteSpace(instructions) && (messages == null || string.IsNullOrWhiteSpace(Json.Text(Json.Member(messages, "instructions_template"))))) continue;
+                template = candidate;
+                break;
+            }
+            if (template == null) return null;
+
+            List<string> entries = new List<string>();
+            for (int i = 0; i < modelSlugs.Length; i++)
+            {
+                string slug = modelSlugs[i];
+                Dictionary<string, object> existing = null;
+                foreach (object item in donorModels)
+                {
+                    Dictionary<string, object> candidate = Json.Object(item);
+                    if (candidate != null && string.Equals(Json.Text(Json.Member(candidate, "slug")), slug, StringComparison.OrdinalIgnoreCase))
+                    {
+                        existing = candidate;
+                        break;
+                    }
+                }
+                if (existing != null)
+                {
+                    entries.Add(Json.Write(existing));
+                    continue;
+                }
+
+                Dictionary<string, object> entry = new Dictionary<string, object>(template, StringComparer.OrdinalIgnoreCase);
+                entry["slug"] = slug;
+                entry["display_name"] = BuiltInProviders.TitleFor(slug, null);
+                entry["description"] = BuiltInProviders.Describe(slug).Replace("\n", " ");
+                entry["input_modalities"] = new List<object> { "text" };
+                entry["supports_image_detail_original"] = false;
+                double window = ContextWindowFor(slug);
+                entry["context_window"] = window;
+                entry["max_context_window"] = window;
+                entry["effective_context_window_percent"] = 90.0;
+                entry["priority"] = (double)(i + 1);
+                entries.Add(Json.Write(entry));
+            }
+            return "{\"models\":[" + string.Join(",", entries.ToArray()) + "]}";
+        }
+
+        private static double ContextWindowFor(string slug)
+        {
+            if (slug == "MiniMax-M3") return 1000000.0;
+            return 204800.0;
         }
 
         /// <summary>Refreshes every provider catalog; safe to call from a background thread.</summary>
@@ -2360,24 +2485,14 @@ namespace CodexModelSwitcher
         private string EnsureCustomCatalog(ProviderProfile profile)
         {
             string path = Path.Combine(appData, "model-" + profile.Id + ".json");
-            string json = "{\n  \"models\": [\n    {\n" +
-                "      \"slug\": " + JsonString(profile.Model) + ",\n" +
-                "      \"display_name\": " + JsonString(profile.Name + " · " + profile.Model) + ",\n" +
-                "      \"description\": \"Imported Responses API compatible model\",\n" +
-                "      \"prefer_websockets\": false,\n" +
-                "      \"support_verbosity\": false,\n" +
-                "      \"apply_patch_tool_type\": \"freeform\",\n" +
-                "      \"web_search_tool_type\": \"text\",\n" +
-                "      \"input_modalities\": [\"text\"],\n" +
-                "      \"supports_parallel_tool_calls\": true,\n" +
-                "      \"context_window\": 128000,\n" +
-                "      \"max_context_window\": 128000,\n" +
-                "      \"effective_context_window_percent\": 90,\n" +
-                "      \"shell_type\": \"shell_command\",\n" +
-                "      \"visibility\": \"list\",\n" +
-                "      \"supported_in_api\": true,\n" +
-                "      \"priority\": 1\n" +
-                "    }\n  ]\n}";
+            string donor = LoadDonorCatalog();
+            string json = donor == null ? null : BuildCatalog(donor, new string[] { profile.Model });
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                Log.Warn("没有完整的模型模板，导入的模型 " + profile.Model + " 将使用 Codex 的回退元数据。");
+                try { if (File.Exists(path)) File.Delete(path); } catch { }
+                return null;
+            }
             WriteAtomic(path, json + Environment.NewLine);
             return path;
         }
@@ -2605,54 +2720,6 @@ namespace CodexModelSwitcher
 }";
 
         /// <summary>
-        /// MiniMax model catalog. Unlike DeepSeek there is no official setup script to scrape, so
-        /// this list is maintained here; the Responses endpoint was verified to support streaming
-        /// and function calling.
-        /// </summary>
-        private const string MiniMaxFallbackCatalog = @"{
-  ""models"": [
-    {
-      ""slug"": ""MiniMax-M3"",
-      ""display_name"": ""MiniMax-M3"",
-      ""description"": ""MiniMax frontier model with tool calling and long context."",
-      ""prefer_websockets"": false,
-      ""support_verbosity"": false,
-      ""apply_patch_tool_type"": ""freeform"",
-      ""web_search_tool_type"": ""text"",
-      ""input_modalities"": [""text""],
-      ""supports_parallel_tool_calls"": true,
-      ""context_window"": 1000000,
-      ""max_context_window"": 1000000,
-      ""effective_context_window_percent"": 90,
-      ""default_reasoning_level"": ""high"",
-      ""shell_type"": ""shell_command"",
-      ""visibility"": ""list"",
-      ""minimal_client_version"": ""0.144.0"",
-      ""supported_in_api"": true,
-      ""priority"": 1
-    },
-    {
-      ""slug"": ""MiniMax-M2"",
-      ""display_name"": ""MiniMax-M2"",
-      ""description"": ""MiniMax reasoning model for everyday agentic tasks."",
-      ""prefer_websockets"": false,
-      ""support_verbosity"": false,
-      ""apply_patch_tool_type"": ""freeform"",
-      ""web_search_tool_type"": ""text"",
-      ""input_modalities"": [""text""],
-      ""supports_parallel_tool_calls"": true,
-      ""context_window"": 204800,
-      ""max_context_window"": 204800,
-      ""effective_context_window_percent"": 90,
-      ""default_reasoning_level"": ""high"",
-      ""shell_type"": ""shell_command"",
-      ""visibility"": ""list"",
-      ""minimal_client_version"": ""0.144.0"",
-      ""supported_in_api"": true,
-      ""priority"": 2
-    }
-  ]
-}";
     }
 
     internal static class CodexLauncher
@@ -2913,6 +2980,83 @@ namespace CodexModelSwitcher
     /// </summary>
     internal static class Json
     {
+        /// <summary>Serialises a parsed value back to compact JSON.</summary>
+        public static string Write(object value)
+        {
+            StringBuilder builder = new StringBuilder();
+            WriteValue(builder, value);
+            return builder.ToString();
+        }
+
+        private static void WriteValue(StringBuilder builder, object value)
+        {
+            if (value == null) { builder.Append("null"); return; }
+            Dictionary<string, object> map = Object(value);
+            if (map != null)
+            {
+                builder.Append('{');
+                bool first = true;
+                foreach (KeyValuePair<string, object> pair in map)
+                {
+                    if (!first) builder.Append(',');
+                    first = false;
+                    WriteString(builder, pair.Key);
+                    builder.Append(':');
+                    WriteValue(builder, pair.Value);
+                }
+                builder.Append('}');
+                return;
+            }
+            List<object> array = Array(value);
+            if (array != null)
+            {
+                builder.Append('[');
+                for (int i = 0; i < array.Count; i++)
+                {
+                    if (i > 0) builder.Append(',');
+                    WriteValue(builder, array[i]);
+                }
+                builder.Append(']');
+                return;
+            }
+            if (value is bool) { builder.Append(((bool)value) ? "true" : "false"); return; }
+            if (value is double)
+            {
+                double number = (double)value;
+                builder.Append(Math.Abs(number) < 1e15 && number == Math.Floor(number)
+                    ? ((long)number).ToString(CultureInfo.InvariantCulture)
+                    : number.ToString("R", CultureInfo.InvariantCulture));
+                return;
+            }
+            WriteString(builder, Convert.ToString(value, CultureInfo.InvariantCulture));
+        }
+
+        private static void WriteString(StringBuilder builder, string text)
+        {
+            builder.Append('"');
+            if (text != null)
+            {
+                foreach (char c in text)
+                {
+                    switch (c)
+                    {
+                        case '"': builder.Append("\\\""); break;
+                        case '\\': builder.Append("\\\\"); break;
+                        case '\b': builder.Append("\\b"); break;
+                        case '\f': builder.Append("\\f"); break;
+                        case '\n': builder.Append("\\n"); break;
+                        case '\r': builder.Append("\\r"); break;
+                        case '\t': builder.Append("\\t"); break;
+                        default:
+                            if (c < ' ') builder.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                            else builder.Append(c);
+                            break;
+                    }
+                }
+            }
+            builder.Append('"');
+        }
+
         public static bool TryParse(string text, out object value)
         {
             value = null;
@@ -3181,7 +3325,7 @@ namespace CodexModelSwitcher
             BaseUrl = "https://api.minimax.cn/v1",
             Glyph = "M",
             Accent = Color.FromArgb(224, 84, 44),
-            DefaultModels = new string[] { "MiniMax-M3", "MiniMax-M2" }
+            DefaultModels = new string[] { "MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5" }
         };
 
         public static List<BuiltInProvider> All()
@@ -3209,6 +3353,9 @@ namespace CodexModelSwitcher
             if (slug == "deepseek-v4-pro") return "DeepSeek V4 Pro";
             if (slug == "MiniMax-M3") return "MiniMax M3";
             if (slug == "MiniMax-M2") return "MiniMax M2";
+            if (slug == "MiniMax-M2.7") return "MiniMax M2.7";
+            if (slug == "MiniMax-M2.5") return "MiniMax M2.5";
+            if (slug == "MiniMax-M2.1") return "MiniMax M2.1";
             if (string.IsNullOrWhiteSpace(catalogName)) return (slug ?? "").Replace('-', ' ');
             return catalogName.Replace('-', ' ').Trim();
         }
@@ -3219,6 +3366,9 @@ namespace CodexModelSwitcher
             if (slug == "deepseek-v4-pro") return "增强推理能力，回答更深入\n适合复杂和长周期任务";
             if (slug == "MiniMax-M3") return "MiniMax 新一代模型\n长上下文，工具调用稳定";
             if (slug == "MiniMax-M2") return "MiniMax 推理模型\n适合中等复杂度任务";
+            if (slug == "MiniMax-M2.7") return "MiniMax 主力模型\n速度与推理平衡";
+            if (slug == "MiniMax-M2.5") return "MiniMax 上一代主力\n稳定可靠";
+            if (slug == "MiniMax-M2.1") return "MiniMax 轻量模型\n响应更快";
             return "来自提供商官方模型目录\n点击切换并启动 Codex";
         }
     }
@@ -3282,6 +3432,43 @@ namespace CodexModelSwitcher
             if (!value) throw new InvalidOperationException(message);
         }
 
+        /// <summary>
+        /// A minimal but complete catalogue entry, used as the clone template in tests. Codex refuses
+        /// entries without instructions, which is exactly the failure this guards against.
+        /// </summary>
+        private const string CompleteDonorCatalog = @"{
+  ""models"": [
+    {
+      ""slug"": ""deepseek-flash"",
+      ""display_name"": ""DeepSeek-Flash"",
+      ""description"": ""template"",
+      ""prefer_websockets"": false,
+      ""support_verbosity"": true,
+      ""default_verbosity"": ""low"",
+      ""apply_patch_tool_type"": ""freeform"",
+      ""web_search_tool_type"": ""text"",
+      ""input_modalities"": [""text""],
+      ""truncation_policy"": {""mode"": ""tokens"", ""limit"": 10000},
+      ""supports_parallel_tool_calls"": true,
+      ""experimental_supported_tools"": null,
+      ""context_window"": 1000000,
+      ""max_context_window"": 1000000,
+      ""effective_context_window_percent"": 95,
+      ""default_reasoning_level"": ""high"",
+      ""supported_reasoning_levels"": [
+        {""effort"": ""low"", ""description"": ""Faster""},
+        {""effort"": ""high"", ""description"": ""Deeper""},
+        {""effort"": ""max"", ""description"": ""Maximum""}
+      ],
+      ""shell_type"": ""shell_command"",
+      ""visibility"": ""list"",
+      ""supported_in_api"": true,
+      ""priority"": 1,
+      ""base_instructions"": ""You are Codex, a coding agent.""
+    }
+  ]
+}";
+
         /// <summary>MiniMax joined DeepSeek as a built-in provider; both must behave identically.</summary>
         private static void RunThreeWayChecks(string codex, string data)
         {
@@ -3304,7 +3491,25 @@ namespace CodexModelSwitcher
             Assert(config.Contains("args = [\"--print-secret\", \"minimax\"]"), "MiniMax 取密钥命令不正确");
             Assert(!config.Contains("env_key"), "不应使用 env_key 存放密钥");
             Assert(!Regex.IsMatch(config, "sk-[A-Za-z0-9_\\-]{20,}"), "配置里出现了明文密钥");
-            Assert(File.Exists(Path.Combine(data, "minimax-models.json")), "未生成 MiniMax 模型目录");
+
+            // 没有完整模板时不能写目录，且不能把 model_catalog_json 写进配置（Codex 会拒绝加载模型）
+            Assert(!config.Contains("model_catalog_json"), "没有完整模板时不应写入 model_catalog_json");
+
+            // 给出完整模板后，应克隆出含 instructions 的合法目录
+            string donorPath = Path.Combine(data, "deepseek-models.json");
+            File.WriteAllText(donorPath, CompleteDonorCatalog, new UTF8Encoding(false));
+            switcher.ActivateBuiltIn("minimax", "MiniMax-M3");
+            string withCatalog = File.ReadAllText(configPath);
+            string catalogPath = Path.Combine(data, "minimax-models.json");
+            Assert(File.Exists(catalogPath), "有模板时未生成 MiniMax 模型目录");
+            Assert(withCatalog.Contains("model_catalog_json"), "有模板时未写入 model_catalog_json");
+            string catalogText = File.ReadAllText(catalogPath);
+            Assert(catalogText.Contains("base_instructions"), "克隆出的目录缺少 base_instructions");
+            Assert(catalogText.Contains("MiniMax-M3"), "克隆出的目录缺少目标模型");
+            object parsedCatalog;
+            Assert(Json.TryParse(catalogText, out parsedCatalog), "克隆出的目录不是合法 JSON");
+            List<object> entries = Json.Array(Json.Member(parsedCatalog, "models"));
+            Assert(entries != null && entries.Count == 3, "克隆出的目录模型数量不正确");
 
             // 三方来回切换：DeepSeek -> MiniMax -> GPT，最后应清空所有受管理的提供商段
             switcher.ActivateBuiltIn("deepseek", "deepseek-flash");
@@ -3349,7 +3554,7 @@ namespace CodexModelSwitcher
 
             Switcher first = new Switcher(codex, data, @"C:\Tools\One\CodexModelSwitcher.exe", false);
             first.ActivateDeepSeek("deepseek-flash");
-            Assert(first.IsApiKeyMode(), "DeepSeek 模式未被识别为 API Key 模式");
+            Assert(!first.IsApiKeyMode(), "切换第三方模型后不应强制 API Key 登录（会踢掉 ChatGPT 登录态）");
 
             // A recorded path that still exists must be left alone, even if it is not the current exe.
             string survivingCopy = Path.Combine(data, "CodexModelSwitcher.exe");

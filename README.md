@@ -4,7 +4,14 @@ A small Windows GUI launcher that switches the Codex desktop app between your Ch
 
 Codex 桌面端可以在界面里切换模型，但要在「ChatGPT 账号登录」和「第三方 API Key」之间来回切换，只能手改 `%USERPROFILE%\.codex\config.toml`。这个小工具把这件事变成点一下卡片：写入安全配置、备份原配置、然后打开 Codex。
 
-当前版本：1.8
+当前版本：1.9
+
+1.9 版：修掉两个会导致「切到第三方模型后 Codex 回到初始化页」的真实原因
+
+- **不再写 `preferred_auth_method` / `forced_login_method`**。这两行会强制 API Key 登录，而 Codex 面对已登录的 ChatGPT 会话会直接回一句 `API key login is required, but ChatGPT is currently being used. Logging out.` 然后登出——桌面端就回到了初始化页。DeepSeek 官方脚本里有这两行（它是给未登录的 CLI 准备的），但对已经登录 ChatGPT 的桌面端是有害的。自定义提供商只靠 `model_provider` 就能正确路由，所以去掉它们后模型照常工作，ChatGPT 登录态保留。
+- **模型目录改为「克隆完整条目」而不是手写**。Codex 拒绝字段不全的目录条目（缺 `truncation_policy`、`experimental_supported_tools`、`supported_reasoning_levels`，尤其必须有 `base_instructions` 或 `model_messages.instructions_template`），目录被拒绝就意味着模型加载失败、界面退回初始化页。现在以 DeepSeek 官方目录作为模板克隆并覆盖模型相关字段；拿不到模板时**干脆不写** `model_catalog_json`，让 Codex 用回退元数据，也不会写出一份坏目录。
+- MiniMax 模型列表按官方 `/v1/models` 的实际返回值更新为 `MiniMax-M3` / `MiniMax-M2.7` / `MiniMax-M2.5`。
+- 新增命令行开关 `--activate <providerId> <model>`，可用于脚本化切换与自动化测试。
 
 1.8 版：**三方切换**
 
